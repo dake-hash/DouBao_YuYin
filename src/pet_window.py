@@ -38,6 +38,7 @@ class PetWindow(QWidget):
     INDICATOR_OFF = QColor("#9E9E9E")  # 灰色 — 语音已关闭
 
     voice_toggled = Signal(bool)
+    login_completed = Signal()
 
     def __init__(self, settings=None, size: int = 200) -> None:
         super().__init__()
@@ -165,6 +166,7 @@ class PetWindow(QWidget):
 
         menu = PetMenu(self, self._settings)
         menu.voice_toggled.connect(self._on_voice_toggled)
+        menu.login_requested.connect(self._on_login_requested)
         menu.quit_requested.connect(QApplication.instance().quit)
 
         # 在鼠标点击位置弹出菜单
@@ -177,3 +179,13 @@ class PetWindow(QWidget):
         self.update()  # 重绘指示器
         self.voice_toggled.emit(enabled)
         print(f"[PetWindow] 语音{'已开启' if enabled else '已关闭'}")
+
+    def _on_login_requested(self) -> None:
+        """打开豆包登录窗口，完成后重绘指示器并转发信号。"""
+        from auth_webview import AuthWebView
+
+        dlg = AuthWebView(self._settings, self)
+        if dlg.exec() == AuthWebView.DialogCode.Accepted:
+            self.update()  # 指示器状态可能变化
+            self.login_completed.emit()
+            print("[PetWindow] 登录完成")

@@ -75,6 +75,7 @@ class PetMenu(QMenu):
     """
 
     voice_toggled = Signal(bool)
+    login_requested = Signal()
     quit_requested = Signal()
 
     def __init__(self, parent, settings) -> None:
@@ -87,6 +88,11 @@ class PetMenu(QMenu):
         self.addAction(self._voice_action)
 
         self.addSeparator()
+
+        # 登录豆包（文字动态切换）
+        self._login_action = QAction(self)
+        self._login_action.triggered.connect(self.login_requested.emit)
+        self.addAction(self._login_action)
 
         # 设置
         settings_action = QAction("设置", self)
@@ -115,6 +121,13 @@ class PetMenu(QMenu):
             self._voice_action.setText("关闭语音识别")
         else:
             self._voice_action.setText("开启语音识别")
+
+    def _refresh_login_action(self) -> None:
+        """根据当前 auth_token 状态更新登录菜单项文字。"""
+        if self._settings.auth_token:
+            self._login_action.setText("重新登录豆包")
+        else:
+            self._login_action.setText("登录豆包")
 
     def _on_voice_toggle(self) -> None:
         """切换语音识别开关。"""
@@ -145,6 +158,7 @@ class PetMenu(QMenu):
     # ------------------------------------------------------------------
 
     def show_at(self, pos: QPoint) -> None:
-        """在指定位置弹出菜单。弹出前自动刷新开关项文字。"""
+        """在指定位置弹出菜单。弹出前自动刷新开关项和登录项文字。"""
         self._refresh_voice_action()
+        self._refresh_login_action()
         self.popup(pos)
