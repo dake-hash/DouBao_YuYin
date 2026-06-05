@@ -32,13 +32,14 @@ class DoubaoPetApp:
         # 设置
         self.settings = Settings()
 
-        # 桌宠窗口（P1）
-        self.pet_window = PetWindow()
+        # 桌宠窗口（P1 → P2: 集成 settings + 语音开关菜单）
+        self.pet_window = PetWindow(settings=self.settings)
+        self.pet_window.voice_toggled.connect(self._on_voice_toggled)
         self.pet_window.show()
 
         # 系统托盘
         self.tray = TrayIcon()
-        self.tray.set_tooltip("豆包桌宠 — 语音已关闭")
+        self._update_tray_tooltip(self.settings.voice_enabled)
         self.tray.quit_requested.connect(self.quit)
         self.tray.show()
 
@@ -61,3 +62,17 @@ class DoubaoPetApp:
         self.pet_window.close()
         self.tray.hide()
         self._app.quit()
+
+    # ------------------------------------------------------------------
+    # P2: 语音开关联动
+    # ------------------------------------------------------------------
+
+    def _on_voice_toggled(self, enabled: bool) -> None:
+        """语音开关切换时更新托盘提示。"""
+        self._update_tray_tooltip(enabled)
+
+    def _update_tray_tooltip(self, enabled: bool) -> None:
+        """根据语音开关状态更新托盘 tooltip。"""
+        status = "语音已开启" if enabled else "语音已关闭"
+        self.tray.set_tooltip(f"豆包桌宠 — {status}")
+        print(f"[App] 托盘 tooltip → {status}")

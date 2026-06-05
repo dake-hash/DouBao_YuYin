@@ -4,10 +4,11 @@ pet_window.py — 桌宠窗口
 P1: 透明、置顶、无边框、可拖动的桌面宠物窗口。
 通过 paintEvent 直接绘制 GIF 帧，彻底解决透明渲染问题。
 支持区分「拖动」和「点击」操作。
+P2: 集成 PetMenu 点击菜单 + 语音开关状态指示器。
 """
 
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QMouseEvent, QPainter
+from PySide6.QtCore import Qt, QPoint, Signal
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from pet_animation import PetAnimation
@@ -22,12 +23,25 @@ class PetWindow(QWidget):
         - 初始位置: 屏幕右下角
         - 可拖动到任意位置
         - 区分拖动与点击（移动 < 5px 视为点击）
+        - 点击弹出语音开关菜单（P2）
+
+    Signals:
+        voice_toggled(bool):  语音开关状态变化时发射
     """
 
     DRAG_THRESHOLD = 5
 
-    def __init__(self, size: int = 200) -> None:
+    # 指示器样式
+    INDICATOR_RADIUS = 6
+    INDICATOR_MARGIN = 8
+    INDICATOR_ON = QColor("#00E676")   # 绿色 — 语音已开启
+    INDICATOR_OFF = QColor("#9E9E9E")  # 灰色 — 语音已关闭
+
+    voice_toggled = Signal(bool)
+
+    def __init__(self, settings=None, size: int = 200) -> None:
         super().__init__()
+        self._settings = settings
         self._drag_start_global: QPoint | None = None
         self._drag_start_pos: QPoint | None = None
         self._was_dragged = False
@@ -70,7 +84,7 @@ class PetWindow(QWidget):
     # ------------------------------------------------------------------
 
     def paintEvent(self, event) -> None:
-        """直接在透明窗口上绘制当前动画帧。"""
+        """直接在透明窗口上绘制当前动画帧 + 语音状态指示器。"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
@@ -88,14 +102,33 @@ class PetWindow(QWidget):
             painter.drawPixmap(x, y, scaled)
         else:
             # 保底：画一个紫色圆形，至少能看到东西
-            from PySide6.QtGui import QColor, QBrush, QPen
             painter.setBrush(QColor("#6C5CE7"))
             painter.setPen(QPen(QColor("#4A3DB5"), 2))
             cx, cy = self.width() // 2, self.height() // 2
             r = min(cx, cy) - 4
             painter.drawEllipse(QPoint(cx, cy), r, r)
 
+        # P2: 语音状态指示器（右上角圆点）
+        self._draw_indicator(painter)
+
         painter.end()
+
+    def _draw_indicator(self, painter: QPainter) -> None:
+        """在窗口右上角绘制语音状态指示圆点。"""
+        if self._settings is None:
+            return
+
+        enabled = self._settings.voice_enabled
+        color = self.INDICATOR_ON if enabled else self.INDICATOR_OFF
+
+        # 右上角定位
+        cx = self.width() - self.INDICATOR_MARGIN - self.INDICATOR_RADIUS
+        cy = self.INDICATOR_MARGIN + self.INDICATOR_RADIUS
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(color)
+        painter.setPen(QPen(color.darker(120), 1))
+        painter.drawEllipse(QPoint(cx, cy), self.INDICATOR_RADIUS, self.INDICATOR_RADIUS)
 
     # ------------------------------------------------------------------
     # 拖动 & 点击
@@ -123,5 +156,24 @@ class PetWindow(QWidget):
             self._drag_start_pos = None
 
     def _on_clicked(self) -> None:
-        """点击桌宠回调。P1 仅打日志，P2 改为弹出菜单。"""
-        print("[PetWindow] 桌宠被点击")
+        """点击桌宠回调 — 弹出语音开关菜单。"""
+        if self._settings is None:
+            print("[PetWindow] 桌宠被点击（无 settings 引用，无法弹出菜单）")
+            return
+
+        from pet_menu import PetMenu
+
+        menu = PetMenu(self, self._settings)
+        menu.voice_toggled.connect(self._on_voice_toggled)
+        menu.quit_requested.connect(QApplication.instance().quit)
+
+        # 在鼠标点击位置弹出菜单
+        cursor_pos = self.cursor().pos()
+        global_pos = self.mapToGlobal(cursor_pos)
+        menu.show_at(global_pos)
+
+    def _on_voice_toggled(self, enabled: bool) -> None:
+        """语音开关切换后刷新指示器并转发信号。"""
+        self.update()  # 重绘指示器
+        self.voice_toggled.emit(enabled)
+        print(f"[PetWindow] 语音{'已开启' if enabled else '已关闭'}")
