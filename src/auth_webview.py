@@ -85,6 +85,7 @@ class AuthWebView(QDialog):
         layout.addLayout(btn_layout)
 
         # ── 自动轮询登录状态 ────────────────────────────────────
+        self._poll_count = 0
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll_login_state)
@@ -103,22 +104,69 @@ class AuthWebView(QDialog):
 
     def _poll_login_state(self) -> None:
         """定时执行 JS 检查是否已登录。"""
+        self._poll_count += 1
+
         js = """
         (function() {
             try {
-                var url = window.location.href;
-                var cookies = document.cookie;
-                var hasSession = cookies.length > 50;  // 登录后 cookie 明显变多
-                var isLoginPage = url.indexOf('login') > -1;
-                var hasChatUI = document.querySelector('.chat-container') !== null
-                    || document.querySelector('[class*="chat"]') !== null
-                    || document.querySelector('.sidebar') !== null;
+                // 1. 逐 Cookie 名称检查（仅匹配名称，不匹配值，避免子串误判）
+                var pairs = document.cookie.split(';');
+                var authNamePatterns = [
+                    'sessionid=', 'passport_', 'passport_token',
+                    'login_token', 'account_token', 'auth_token',
+                    'sid='  // 通用的 session id cookie（非 slardar 跟踪类）
+                ];
+                var hasAuthCookie = false;
+                for (var i = 0; i < pairs.length; i++) {
+                    var name = pairs[i].trim().split('=')[0];
+                    if (!name) continue;
+                    var kv = name + '=';
+                    for (var j = 0; j < authNamePatterns.length; j++) {
+                        if (kv === authNamePatterns[j] ||
+                            name.indexOf(authNamePatterns[j].replace('=','')) === 0) {
+                            hasAuthCookie = true;
+                            break;
+                        }
+                    }
+                    if (hasAuthCookie) break;
+                }
+
+                // 2. 检查 localStorage 中是否有认证 token
+                var hasLocalToken = false;
+                var tokenKeys = ['token', 'access_token', 'auth_token',
+                    'login_info', 'account_info', 'user_info',
+                    '__tea_cache_tokens_'];  // 豆包用户 token 缓存 key
+                for (var i = 0; i < tokenKeys.length; i++) {
+                    var val = localStorage.getItem(tokenKeys[i]);
+                    if (val && val.length > 20) {  // 排除空值或过短的值
+                        hasLocalToken = true;
+                        break;
+                    }
+                }
+
+                // 3. 检查页面上是否存在登录入口（存在 = 未登录）
+                //    豆包未登录时会显示手机号/扫码登录界面
+                var hasLoginUI = false;
+                var allNodes = document.body ? document.body.querySelectorAll('*') : [];
+                for (var i = 0; i < Math.min(allNodes.length, 2000); i++) {
+                    var node = allNodes[i];
+                    // 只检查叶子节点（没有子元素的元素）
+                    if (node.children.length === 0) {
+                        var text = (node.textContent || '').trim();
+                        if (text === '手机号登录' || text === '扫码登录' ||
+                            text === '登录' || text === '登录/注册') {
+                            hasLoginUI = true;
+                            break;
+                        }
+                    }
+                }
+
                 return JSON.stringify({
-                    url: url,
-                    isLoginPage: isLoginPage,
-                    hasSessionCookie: hasSession,
-                    hasChatUI: hasChatUI,
-                    cookieLen: cookies.length
+                    hasAuthCookie: hasAuthCookie,
+                    hasLocalToken: hasLocalToken,
+                    hasLoginUI: hasLoginUI,
+                    cookieLen: document.cookie.length,
+                    cookieCount: pairs.filter(function(p){return p.trim()}).length
                 });
             } catch(e) {
                 return JSON.stringify({error: e.message});
@@ -140,13 +188,26 @@ class AuthWebView(QDialog):
         if "error" in data:
             return
 
-        # 启发式判断：不在登录页 + 有较多 cookie → 已登录
-        is_login_page = data.get("isLoginPage", True)
-        has_session = data.get("hasSessionCookie", False)
-        cookie_len = data.get("cookieLen", 0)
+        # 跳过前 3 次轮询（6 秒），等待页面完全加载
+        if self._poll_count <= 3:
+            return
 
-        if not is_login_page and has_session and cookie_len > 50:
-            print(f"[AuthWebView] 自动检测到登录状态 (cookie_len={cookie_len})")
+        has_auth_cookie = data.get("hasAuthCookie", False)
+        has_local_token = data.get("hasLocalToken", False)
+        has_login_ui = data.get("hasLoginUI", False)
+        cookie_count = data.get("cookieCount", 0)
+
+        print(f"[AuthWebView] 轮询 #{self._poll_count}: "
+              f"auth_cookie={has_auth_cookie} local_token={has_local_token} "
+              f"login_ui={has_login_ui} cookie_count={cookie_count}")
+
+        # 判定：有认证凭据 + 登录界面消失 → 已登录
+        # 注意：不再使用 hasChatUI，因为 /chat/ 页面预登录就有聊天骨架
+        has_credential = has_auth_cookie or has_local_token
+        login_gone = not has_login_ui
+
+        if has_credential and login_gone:
+            print(f"[AuthWebView] 自动检测到登录状态!")
             self._extract_credentials()
 
     # ------------------------------------------------------------------
