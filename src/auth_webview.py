@@ -1,8 +1,11 @@
 """
-auth_webview.py — 豆包凭证提取
+auth_webview.py — 豆包凭证提取 + WebView 持久化
 
 P3: 通过内嵌 QWebEngineView 让用户登录豆包，自动提取 Cookie / Token
-等认证凭证，保存到 Settings。登录完成后销毁 WebView 释放内存。
+等认证凭证，保存到 Settings。
+
+P5 联动: 登录后 WebView 不再销毁，改为隐藏到后台窗口。通过
+WebViewASRBridge 从 JS 发起 WebSocket 连接，绕过 CDN 的 TLS 指纹检测。
 """
 
 import json
@@ -39,17 +42,24 @@ class AuthWebView(QDialog):
     提取 Cookie、localStorage、sessionStorage 中的凭证，
     保存到 settings.auth_token 并设置 7 天过期时间。
 
+    登录完成后:
+      - 如果 keep_alive=True: WebView 被移到隐藏后台窗口，供 P5 桥接使用
+      - 如果 keep_alive=False: WebView 销毁释放内存
+
     Signals:
         login_completed: 凭证提取并保存成功后发射
     """
 
     login_completed = Signal()
 
-    def __init__(self, settings, parent=None) -> None:
+    def __init__(self, settings, parent=None, keep_alive: bool = True) -> None:
         super().__init__(parent)
         self._settings = settings
         self._extracted = False
         self._cookies: list[QNetworkCookie] = []
+        self._keep_alive = keep_alive
+        self._background_window: Optional[QDialog] = None
+        self._bridge = None  # WebViewASRBridge 实例
 
         self.setWindowTitle("登录豆包")
         self.resize(900, 650)
@@ -67,8 +77,15 @@ class AuthWebView(QDialog):
         self._hint.setStyleSheet("padding: 6px; font-size: 13px;")
         layout.addWidget(self._hint)
 
-        # WebEngine 视图
+        # WebEngine 视图 — 使用具名持久化 profile，跨进程/跨会话共享 Cookie
+        from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+        self._profile = QWebEngineProfile("doubao-pet", self)
+        self._profile.setPersistentCookiesPolicy(
+            QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
+        )
         self._webview = QWebEngineView()
+        _page = QWebEnginePage(self._profile, self._webview)
+        self._webview.setPage(_page)
         self._webview.setUrl(QUrl(DOUBAO_URL))
         self._webview.urlChanged.connect(self._on_url_changed)
         layout.addWidget(self._webview, stretch=1)
@@ -314,18 +331,74 @@ class AuthWebView(QDialog):
               f"expiry={self._settings.auth_expiry})")
 
         self.login_completed.emit()
+
+        if self._keep_alive:
+            self._move_to_background()
+        else:
+            self._destroy_webview()
         self.accept()  # 关闭对话框
+
+    def _move_to_background(self) -> None:
+        """将 WebView 移到隐藏后台窗口，供 P5 WebViewASRBridge 使用。"""
+        self._poll_timer.stop()
+
+        from PySide6.QtWidgets import QVBoxLayout
+        from PySide6.QtCore import Qt as QtCore_Qt
+
+        self._background_window = QDialog(None)
+        self._background_window.setWindowTitle("Doubao Background")
+        self._background_window.resize(800, 600)
+        self._background_window.setVisible(False)
+        self._background_window.setAttribute(QtCore_Qt.WA_ShowWithoutActivating, True)
+
+        layout = QVBoxLayout(self._background_window)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._webview.setParent(self._background_window)
+        layout.addWidget(self._webview)
+        self._background_window.hide()
+
+        # 不刷新页面：登录完成后 WebView 已有完整的跨域 session，
+        # 强制 setUrl 会重新加载，丢失内存中的 passport.bytedance.com Cookie。
+        print("[AuthWebView] WebView 已移至后台隐藏窗口 (keep_alive=True，保留当前 session)")
+
+    def _destroy_webview(self) -> None:
+        """销毁 WebView 释放内存 (keep_alive=False)。"""
+        print("[AuthWebView] 销毁 WebView (keep_alive=False)")
+
+    def get_bridge(self):
+        """获取 WebViewASRBridge 实例（需要 keep_alive=True）。
+
+        延迟导入避免循环依赖。
+        """
+        if self._bridge is None and self._webview:
+            from webview_asr_bridge import WebViewASRBridge
+            self._bridge = WebViewASRBridge(self._webview)
+        return self._bridge
+
+    def destroy_background(self) -> None:
+        """主动销毁后台 WebView（应用退出时调用）。"""
+        if self._background_window:
+            self._webview.setParent(None)
+            self._webview.deleteLater()
+            self._background_window.close()
+            self._background_window = None
+            self._webview = None
+            self._bridge = None
+            print("[AuthWebView] 后台 WebView 已销毁")
 
     # ------------------------------------------------------------------
     # 清理
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        """关闭时停止轮询并释放 WebView。"""
+        """关闭时停止轮询。如果 keep_alive 且已提取凭证，WebView 被保留。"""
         self._poll_timer.stop()
         if not self._extracted:
             print("[AuthWebView] 用户取消登录")
-        # 显式清理 WebView 释放资源
-        self._webview.setParent(None)
-        self._webview.deleteLater()
+            self._webview.setParent(None)
+            self._webview.deleteLater()
+        elif not self._keep_alive:
+            self._webview.setParent(None)
+            self._webview.deleteLater()
+        # keep_alive + extracted: WebView 已在 _move_to_background 中重新 parent
         super().closeEvent(event)

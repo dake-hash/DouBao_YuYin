@@ -3,7 +3,7 @@
 > **用途**: 每次重开 Claude CLI 时粘贴本文档，告知当前进度到第几阶段，AI 验证后继续。
 > **目标平台**: Windows 10/11
 > **核心思路**: 参考 [doubao-murmur](https://github.com/lilong7676/doubao-murmur) (macOS)，用 WebSocket 直连豆包免费语音识别服务，不调用付费 API。
-> **技术栈**: Python 3.12 + PySide6 + WebView2 + pyaudio + websocket-client
+> **技术栈**: Python 3.12 + PySide6 + QWebEngineView + pyaudio + websocket-client
 
 ---
 
@@ -35,11 +35,13 @@ doubao-pet/
 │   ├── pet_animation.py         # 动画管理（Lottie/帧序列）
 │   ├── tray.py                  # 系统托盘图标与菜单
 │   ├── settings.py              # 设置管理（JSON 持久化）
-│   ├── auth_webview.py          # WebView2 登录 + Cookie 提取
+│   ├── auth_webview.py          # QWebEngineView 登录 + Cookie 提取 + 后台保活
 │   ├── audio_capture.py         # 麦克风录音（PyAudio / WASAPI）
 │   ├── audio_buffer.py          # 环形缓冲区（录音数据暂存）
-│   ├── doubao_ws.py             # 豆包 WebSocket 客户端
-│   ├── doubao_protocol.py       # 豆包二进制协议编解码
+│   ├── doubao_ws.py             # 豆包 WebSocket 客户端（Python 直连）
+│   ├── doubao_protocol.py       # ASR 参数提取 + URL 构建 + JSON 消息解析
+│   ├── webview_asr_bridge.py    # WebView JS 桥接层（主力 ASR 实现，绕过 TLS 指纹检测）
+│   ├── _qwebchannel.js          # Qt 官方 QWebChannel JS 库（注入到 WebView）
 │   ├── hotkey.py                # 全局热键监听（右Shift 长按，RegisterHotKey 方案）
 │   ├── text_output.py           # 文本注入（剪贴板/SendInput）
 │   ├── status_indicator.py      # 状态浮窗（录音中/识别中/完成）
@@ -73,9 +75,9 @@ doubao-pet/
 2. 创建 `requirements.txt`：
    ```
    PySide6>=6.6
+   PySide6-WebEngine>=6.6
    pyaudio>=0.2.14
    websocket-client>=1.8
-   pywebview>=5.2
    pywin32>=306
    Pillow>=10.0
    requests>=2.31
@@ -209,32 +211,28 @@ assets/
 ## P3 — 豆包凭证提取
 
 ### 目标
-通过内嵌 WebView2 让用户登录豆包，提取认证凭证（Cookie / Token），保存到本地。登录完成后销毁 WebView，后续不再需要浏览器。
+通过内嵌 QWebEngineView 让用户登录豆包，提取认证凭证（Cookie / Token），保存到本地。登录完成后 WebView **不销毁**，移至后台隐藏窗口，供 P5 桥接层复用。
 
 ### 技术要点
-- `pywebview` 创建 WebView2 窗口（Windows 内置 Edge WebView2 Runtime）
+- `PySide6.QtWebEngineWidgets.QWebEngineView` 内嵌浏览器（Chromium）
+- 使用具名持久化 Profile `QWebEngineProfile("doubao-pet")`，Cookie 持久化到磁盘
 - 导航到 `https://www.doubao.com/chat/`
-- 用户手动登录后，通过 JS 注入提取 Cookie
-- 保存到 `settings.json` 的 `auth_token` 字段
-- **关键**：录完 Cookie 后立即销毁 WebView，释放内存
-
-### 参考
-doubao-murmur 的做法：
-1. 内嵌 WKWebView → 加载 doubao.com
-2. 用户手动登录
-3. 提取 Cookie 和关键请求头（device_id, iid, etc.）
-4. 销毁 WebView
-5. 后续直接用 WebSocket + 凭证通信
+- 登录状态检测：JS 轮询 `document.cookie` + localStorage，检测登录 UI 消失
+- 凭证提取：两路并行
+  - JS 端：`document.cookie` + `localStorage` + `sessionStorage`（可见内容）
+  - CookieStore：`QWebEngineProfile.cookieStore().loadAllCookies()`（含 HttpOnly）
+- **关键**：ByteDance SSO 登录 Cookie（`sessionid`、`uid_tt`、`sid_tt`）由 `passport.bytedance.com` 域设置，是跨域 Cookie，`document.cookie` 在 doubao.com 页面无法读取。这些 Cookie 只存在于 WebView 的内存 session 中，不写入磁盘。因此登录后必须保留 WebView 实例。
+- 登录完成后 WebView 移至隐藏后台窗口（`keep_alive=True`），不调用 `setUrl` 刷新（刷新会丢失内存中的跨域 session）
 
 ### 具体任务
-1. 编写 `auth_webview.py`：`AuthWebView` 类
-   - 创建 WebView2 窗口，导航到 `https://www.doubao.com/chat/`
-   - 等待用户登录（检测页面 URL 变化或特定 DOM 元素出现）
-   - 登录成功后通过 `webview.evaluate_js()` 提取 `document.cookie`
-   - 额外提取 localStorage/sessionStorage 中的关键 token
-   - 保存到 `settings.auth_token`（JSON 对象）
-   - 设置 `settings.auth_expiry`（7天后过期，提醒用户重新登录）
-   - 关闭 WebView 窗口
+1. 编写 `auth_webview.py`：`AuthWebView(QDialog)` 类
+   - 创建 `QWebEngineView`，绑定具名持久 Profile
+   - 定时轮询 JS 检测登录状态
+   - 登录完成后提取凭证，保存到 `settings.auth_token`（JSON 对象）
+   - 设置 `settings.auth_expiry`（7天后过期）
+   - `keep_alive=True`：移至隐藏后台窗口保留 session
+   - `keep_alive=False`：销毁 WebView 释放内存
+   - `get_bridge()` → 返回绑定在此 WebView 上的 `WebViewASRBridge`（P5 使用）
 2. 在 `pet_menu.py` 中添加「登录豆包」菜单项
 3. 登录状态检测：
    - 检查 `auth_token` 是否为 null
@@ -242,16 +240,12 @@ doubao-murmur 的做法：
    - 过期时桌宠显示提示（托盘气泡通知）
 
 ### 验收标准
-- [x] 点击菜单「登录豆包」→ 弹出 WebView2 窗口 → 显示豆包登录页
-- [x] 用户在 WebView 中登录成功后 → 窗口自动关闭
+- [x] 点击菜单「登录豆包」→ 弹出 QWebEngineView 窗口 → 显示豆包登录页
+- [x] 用户在 WebView 中登录成功后 → 窗口自动关闭（移至后台）
 - [x] `settings.json` 中 `auth_token` 不再为 null
-- [x] WebView 窗口关闭后进程内存释放（任务管理器验证）
+- [x] WebView 窗口对用户不可见（隐藏到后台），进程内存正常
 - [x] 凭证过期（模拟修改日期）→ 再次点击语音输入时提示「请重新登录豆包」
 - [ ] 未登录状态下按右Shift → 无反应 + 托盘提示「请先登录豆包」
-
-### 关键风险点
-> ⚠️ 豆包网页版可能使用 HttpOnly Cookie + 额外的设备指纹 token。
-> 需要实际抓包确认需要哪些凭证。doubao-murmur 的源码中有完整的凭证提取逻辑，可直接参考。
 
 ### 预期文件
 ```
@@ -309,68 +303,57 @@ src/
 ### 目标
 建立到豆包流式语音识别服务的 WebSocket 连接，发送 PCM 音频，接收实时转录结果。
 
-### 技术要点
-- WebSocket 地址：`wss://openspeech.bytedance.com/api/v3/realtime/dialogue`
-- 自定义二进制协议（参考 doubao-murmur 和火山引擎官方文档）
-- 需要在连接时携带 P3 提取的凭证
-- 支持流式发送（20ms 一包）和流式接收
-
-### 协议概要（需验证）
-```
-消息格式：
-[4字节 Header] + [Optional扩展字段] + [4字节 PayloadSize] + [Payload]
-
-Header 结构（4字节）:
-  - Protocol Version (4 bits)
-  - Header Size (4 bits)
-  - Message Type (4 bits)
-  - Message Type Flags (4 bits)
-  - Serialization Method (4 bits)
-  - Compression Type (4 bits)
-  - Reserved (8 bits)
-
-主要消息类型:
-  - FullClientRequest (0b0001): 客户端发送音频
-  - FullServerResponse (0b1001): 服务端返回识别结果
-```
+### 技术要点（✅ 已通过实测验证）
+- WebSocket 地址：**`wss://ws-samantha.doubao.com/samantha/audio/asr`**
+- **协议极其简单** — 无二进制帧头 / 无握手消息：
+  - **上行**：裸 PCM Int16 LE 音频，直接作为 WebSocket binary frame 发送
+  - **下行**：纯 JSON 文本帧，event 类型只有 "result"（识别结果）和 "finish"（完成）
+  - **认证**：依赖 WebView 内的 Chromium 网络栈自动携带 session Cookie（不在 Python 层手动拼 Cookie header）
+- **架构选型：WebView JS 桥接**（不是 Python 直连）
+  - 豆包服务端部署了 CDN/WAF（ArgusSecurityPlugin），会对 TLS 指纹做检测
+  - Python `websocket-client` 直连被拦截（连接被重置）
+  - 解决方案：通过 P3 保留的 QWebEngineView，在 Chromium 内部用 JS 发起 WebSocket
+  - Chromium 的 TLS 指纹与真实浏览器一致，不被拦截
+- 通信机制：`QWebChannel`（Python ↔ JS 双向）
+  - Python → JS：emit Signal（connectASR / audioData / finishSending / closeASR）
+  - JS → Python：调用 Slot（onOpen / onResult / onFinish / onError / onAuthError / onChannelReady）
+- 预加载音频机制：`connect()` 时将音频 base64 编码传给 JS，在 `ws.onopen` 时立刻冲刷，避免服务端因无音频超时关闭
 
 ### 具体任务
-1. 编写 `doubao_protocol.py`：`DoubaoProtocol` 类
-   - `build_header(msg_type, payload_size)` → 4 字节 header
-   - `encode_message(msg_type, payload_json)` → 完整二进制消息
-   - `decode_message(raw_bytes)` → (msg_type, payload_dict)
-2. 编写 `doubao_ws.py`：`DoubaoWebSocket` 类
-   - `connect(auth_token)` → 建立 WebSocket 连接
-   - `send_audio(audio_chunk: bytes)` → 发送 20ms PCM 数据
-   - `start_session()` → 发送 StartSession 消息
-   - `finish_session()` → 发送 FinishSession 消息
-   - `on_message(callback)` → 注册转录结果回调
-   - `on_error(callback)` → 注册错误回调
-   - `close()` → 正常关闭连接
-   - 自动重连（最多 3 次）
-3. 参考 doubao-murmur 源码实现具体协议细节
-4. 编写单元测试：
-   - 发送一段预录音频 → 验证收到转录结果
+1. 编写 `doubao_protocol.py`：`ASRParams` + URL 构建 + JSON 消息解析
+   - `ASRParams.from_auth_token(auth_token)` → 从 P3 凭证中提取 cookies, device_id, web_id
+   - `build_wss_url(params)` → 构建完整 WSS URL（含所有 query 参数）
+   - `parse_message(raw_text)` → 解析服务端 JSON 响应 → `ServerMessage`
+2. 编写 `doubao_ws.py`：`DoubaoWebSocket` 类（Python 直连版，用于非 CDN 拦截环境或测试）
+3. 编写 `webview_asr_bridge.py`：`WebViewASRBridge` 类（主力实现）
+   - `connect(params, preload_audio)` → 通过 QWebChannel 向 JS 发送连接指令
+   - `send_audio(data: bytes)` → base64 编码后 emit audioData 信号
+   - `finish_sending()` → emit finishSending 信号，JS 端冲刷后关闭 WS
+   - `close()` → emit closeASR 信号
+   - 回调：`on_open` / `on_result` / `on_finish` / `on_error` / `on_auth_error`
+4. 在 JS 注入脚本（`_ASR_BRIDGE_JS`）中实现：
+   - `initChannel()` → 初始化 QWebChannel，握手完成后通知 Python
+   - `connectASR(url, cookieHeader, preloadedB64)` → 建立 WS，预加载音频写入缓冲
+   - `ws.onopen` → 立刻冲刷预加载音频缓冲，再通知 Python `onOpen`
+   - `ws.onmessage` → 解析 JSON，路由到 `onResult` / `onFinish` / `onAuthError`
+   - `finishSending()` → 冲刷缓冲，发空帧 EOF，300ms 后关闭 WS
 
 ### 验收标准
-- [ ] WebSocket 连接成功建立
-- [ ] `start_session()` 后服务端返回确认
-- [ ] `send_audio()` 持续收到 `on_message` 回调（流式识别结果）
-- [ ] `finish_session()` 后收到最终完整结果
+- [x] `doubao_protocol.py` — URL 构建 + 参数提取 + 消息解析
+- [x] `doubao_ws.py` — Python 直连 WebSocket 客户端
+- [x] `webview_asr_bridge.py` — WebView JS 桥接层
+- [x] WebSocket 连接成功建立（通过 WebView Chromium 网络栈）
+- [x] `send_audio()` 持续收到 `on_result` 回调（流式识别结果）
+- [x] 识别准确率与直接使用豆包 Web 版一致（实测："现在开始进行录音测试"）
 - [ ] 连接失败时自动重试（输出日志）
-- [ ] 识别准确率与直接使用豆包 Web 版一致
-
-### 关键风险点
-> ⚠️ 这是整个项目技术风险最高的模块。
-> 豆包的 WebSocket 协议和认证机制没有公开文档，需要逆向工程。
-> **强烈建议**：先研究 doubao-murmur 的 Swift 源码，理解其握手和消息格式，
-> 然后翻译到 Python。如果协议发生变化，这个模块是唯一需要大改的地方。
 
 ### 预期文件
 ```
 src/
-├── doubao_ws.py        ← P5 创建
-├── doubao_protocol.py  ← P5 创建
+├── doubao_ws.py           ← P5 创建 ✅
+├── doubao_protocol.py     ← P5 创建 ✅
+├── webview_asr_bridge.py  ← P5 创建 ✅（主力实现）
+├── _qwebchannel.js        ← P5 创建 ✅（Qt 官方 QWebChannel JS 库）
 ```
 
 ---
@@ -687,11 +670,13 @@ assets/
 | 决策点 | 选择 | 理由 |
 |--------|------|------|
 | GUI 框架 | PySide6 | 成熟、文档多、支持透明窗口 |
-| WebView | `pywebview` (WebView2 后端) | Windows 内置、体积小 |
+| WebView | `PySide6.QtWebEngineWidgets.QWebEngineView` | 与 PySide6 原生集成，无需额外依赖，Chromium 内核 TLS 指纹与真实浏览器一致 |
+| WebView Profile | `QWebEngineProfile("doubao-pet")` 具名持久化 | Cookie 持久化到磁盘；登录后保留 WebView 实例以保持跨域 session |
+| ASR 连接方式 | `WebViewASRBridge`（WebView JS 桥接） | 豆包服务端 CDN/WAF 对 Python `websocket-client` 做 TLS 指纹检测并拦截；通过 Chromium 内部 JS 发起 WebSocket 可绕过 |
+| Python ↔ JS 通信 | `QWebChannel` | Qt 原生双向通信，无需 HTTP server；Signal/Slot 映射直观 |
 | 音频采集 | `pyaudio` | 跨平台、稳定、PortAudio 底层 |
 | 全局热键 | `RegisterHotKey` (win32gui) + `GetAsyncKeyState` (win32api) | 无 hook、杀软安全、系统原生 API |
 | 文本注入 | `pywin32` (剪贴板 + SendInput) | Windows 原生、最可靠 |
-| WebSocket | `websocket-client` | 纯 Python、支持 WSS |
 | 打包 | Nuitka | 编译为原生代码、体积更小 |
 
 ## 附录 B：关键风险
@@ -700,8 +685,8 @@ assets/
 |------|:---:|------|
 | 豆包 WebSocket 协议变更 | 🔴 高 | 参考 doubao-murmur 维护策略，关注其更新 |
 | 豆包认证机制变更 | 🔴 高 | 凭证提取逻辑模块化，方便单独更新 |
+| CDN/WAF TLS 指纹检测升级 | 🟡 中 | 已切换为 WebView JS 桥接，Chromium 指纹与真实浏览器一致；若进一步升级可考虑注入更多浏览器特征 |
 | 杀软误报（全局键盘钩子） | 🟢 低 | 使用 RegisterHotKey + GetAsyncKeyState，不注册任何钩子，杀软不报 |
-| WebView2 Runtime 未安装（Win10） | 🟡 中 | 首次运行检测并引导安装 |
 | 不同 CLI 终端文本注入兼容性 | 🟡 中 | 提供多种注入策略，用户可选 |
 | 中文识别偶尔不准 | 🟢 低 | 豆包 ASR 准确率本身很高 |
 
