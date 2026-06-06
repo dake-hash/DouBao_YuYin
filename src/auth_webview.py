@@ -10,6 +10,7 @@ WebViewASRBridge 从 JS 发起 WebSocket 连接，绕过 CDN 的 TLS 指纹检�
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkCookie

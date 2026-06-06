@@ -61,7 +61,7 @@ class HotkeyManager(QObject):
     """
 
     recording_started = Signal()
-    recording_stopped = Signal()
+    recording_stopped = Signal(int)   # 携带目标窗口 hwnd
     hotkey_conflict = Signal(str)
 
     HOLD_THRESHOLD_MS = 200
@@ -202,12 +202,9 @@ class HotkeyManager(QObject):
         if not (time.monotonic() - recording_start >= self.MAX_RECORD_SECONDS):
             print("[Hotkey] 松手，停止录音")
 
-        # 阶段 4: 停止录音，直接投递文本到目标窗口
+        # 阶段 4: 停止录音，emit 信号通知 app.py（携带目标窗口句柄）
         self._state = self.IDLE
-        self.recording_stopped.emit()
-
-        if self._inject_fn is not None and self._target_hwnd:
-            _post_text(self._target_hwnd, "P7验收：文本注入测试")
+        self.recording_stopped.emit(self._target_hwnd)
 
     # ------------------------------------------------------------------
     # 清理

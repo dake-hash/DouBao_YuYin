@@ -185,6 +185,7 @@ class PetWindow(QWidget):
         from auth_webview import AuthWebView
 
         dlg = AuthWebView(self._settings, self)
+        self._last_auth_webview = dlg  # P8: 供 app.py 获取桥接实例
         if dlg.exec() == AuthWebView.DialogCode.Accepted:
             self.update()  # 指示器状态可能变化
             self.login_completed.emit()

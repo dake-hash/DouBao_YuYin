@@ -6,47 +6,40 @@ P1: 集成 PetWindow（透明置顶桌宠窗口）。
 P4: 集成 AudioCapture + AudioBuffer 麦克风采集。
 P6: 集成 HotkeyManager 全局热键（右Ctrl 长按）。
 P7: 集成 TextOutput 文本注入到活动窗口。
+P8: 全流程串联 + StatusIndicator 状态浮窗 + WebViewASRBridge 接入。
 """
 
 from datetime import datetime, timezone
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from audio_buffer import AudioBuffer
 from audio_capture import AudioCapture
-from hotkey import HotkeyManager
+from doubao_protocol import ASRParams
+from hotkey import HotkeyManager, _post_text
 from pet_window import PetWindow
 from settings import Settings
+from status_indicator import StatusIndicator
 from text_output import TextOutput
 from tray import TrayIcon
 
 
 class DoubaoPetApp:
-    """豆包桌宠主应用。
-
-    职责:
-        - 创建 QApplication（不依赖系统命令行参数）
-        - 初始化 Settings、PetWindow、TrayIcon
-        - 初始化 AudioBuffer、AudioCapture、HotkeyManager
-        - 编排各模块生命周期
-        - 连接托盘「退出」信号 → 优雅退出
-        - 首次运行时标记 first_run = False
-    """
+    """豆包桌宠主应用。"""
 
     def __init__(self) -> None:
-        # Qt 应用（不传 sys.argv 避免与 Python 参数混淆）
         self._app = QApplication([])
         self._app.setApplicationName("豆包桌宠")
         self._app.setQuitOnLastWindowClosed(False)
 
-        # 设置
         self.settings = Settings()
 
         # ── P4: 音频采集 ────────────────────────────────────────
         self.audio_buffer = AudioBuffer()
         self.audio_capture = AudioCapture(self.audio_buffer)
 
-        # ── 桌宠窗口（P1 → P2: 集成 settings + 语音开关菜单）───
+        # ── P1/P2: 桌宠窗口 ─────────────────────────────────────
         self.pet_window = PetWindow(settings=self.settings)
         self.pet_window.voice_toggled.connect(self._on_voice_toggled)
         self.pet_window.login_completed.connect(self._on_login_completed)
@@ -58,7 +51,10 @@ class DoubaoPetApp:
         self.tray.quit_requested.connect(self.quit)
         self.tray.show()
 
-        # ── P6: 全局热键（右Ctrl 长按）─────────────────────────
+        # ── P8: 状态浮窗 ────────────────────────────────────────
+        self.status = StatusIndicator()
+
+        # ── P6: 全局热键 ────────────────────────────────────────
         self.hotkey = HotkeyManager()
         self.hotkey.set_settings(self.settings)
         self.hotkey.set_tray(self.tray)
@@ -68,15 +64,22 @@ class DoubaoPetApp:
 
         # ── P7: 文本注入 ────────────────────────────────────────
         self.text_output = TextOutput()
-        # 注入在 pynput 线程里松手瞬间直接调用，绕开 Qt queued signal 的异步延迟
-        self.hotkey.set_inject_fn(self.text_output._paste_via_sendinput)
+
+        # ── P8: ASR 桥接（延迟初始化，登录后创建）────────────────
+        self._asr_bridge = None
+        self._auth_webview = None
+        self._pending_target_hwnd: int = 0
+        self._last_asr_text: str = ""
+
+        # ── P8: 音频流式推送定时器（录音时每 100ms 推送一次）────────
+        self._stream_timer = QTimer()
+        self._stream_timer.setInterval(100)
+        self._stream_timer.timeout.connect(self._push_audio_to_asr)
 
         self.hotkey.register()
 
-        # P3: 启动时检查凭证是否过期
         self._check_auth_expiry()
 
-        # 首次运行标记
         if self.settings.first_run:
             self.settings.first_run = False
             print("[App] 首次运行，已标记 first_run = False")
@@ -86,16 +89,18 @@ class DoubaoPetApp:
     # ------------------------------------------------------------------
 
     def run(self) -> int:
-        """进入 Qt 事件循环。返回 exit code。"""
         return self._app.exec()
 
     def quit(self) -> None:
-        """优雅退出：停止录音 → 注销热键 → 关闭桌宠 → 隐藏托盘 → 退出 Qt。"""
         print("[App] 正在退出...")
+        self._stream_timer.stop()
         self.audio_capture.stop()
         self.hotkey.cleanup()
         self.pet_window.close()
         self.tray.hide()
+        self.status.hide()
+        if self._auth_webview is not None:
+            self._auth_webview.destroy_background()
         self._app.quit()
 
     # ------------------------------------------------------------------
@@ -103,11 +108,9 @@ class DoubaoPetApp:
     # ------------------------------------------------------------------
 
     def _on_voice_toggled(self, enabled: bool) -> None:
-        """语音开关切换时更新托盘提示。"""
         self._update_tray_tooltip(enabled)
 
     def _update_tray_tooltip(self, enabled: bool) -> None:
-        """根据语音开关状态更新托盘 tooltip。"""
         status = "语音已开启" if enabled else "语音已关闭"
         self.tray.set_tooltip(f"豆包桌宠 — {status}")
         print(f"[App] 托盘 tooltip → {status}")
@@ -117,47 +120,154 @@ class DoubaoPetApp:
     # ------------------------------------------------------------------
 
     def _on_recording_started(self) -> None:
-        """右Ctrl 长按确认 → 开始麦克风采集。"""
+        """右Ctrl 长按确认 → 开始录音，连接 ASR，启动流式推送。"""
+        print("[App] 录音开始")
         self.audio_buffer.clear()
         self.audio_capture.start()
+        self.status.show_status("listening")
 
-    def _on_recording_stopped(self) -> None:
-        """松手 / 超时 → 停止麦克风采集，打印缓冲区统计。文本注入已在 pynput 线程完成。"""
+        bridge = self._get_or_create_bridge()
+        if bridge is None:
+            print("[App] ASR 桥接不可用，跳过连接")
+            return
+
+        params = ASRParams.from_auth_token(self.settings.auth_token)
+        if params is None:
+            print("[App] ASR 参数提取失败，跳过连接")
+            self.tray.show_message("豆包桌宠", "凭证无效，请重新登录豆包")
+            return
+
+        bridge.on_result = self._on_asr_result
+        bridge.on_finish = self._on_asr_finish
+        bridge.on_error = self._on_asr_error
+        bridge.on_auth_error = self._on_asr_auth_error
+
+        self._last_asr_text = ""
+        bridge.connect(params)
+        self._stream_timer.start()  # 开始每 100ms 推送音频
+
+    def _on_recording_stopped(self, target_hwnd: int) -> None:
+        """松手 / 超时 → 停止录音，直接注入已识别文本，不等 finish 事件。"""
+        print("[App] 录音停止")
+        self._stream_timer.stop()
         self.audio_capture.stop()
-        available = self.audio_buffer.available_bytes
-        print(f"[App] 录音结束，缓冲区数据: {available} bytes "
-              f"({available / 32000:.1f} 秒 @ 16kHz mono)")
+        self.status.show_status("thinking")
+
+        bridge = self._asr_bridge
+        if bridge is not None:
+            remaining = self.audio_buffer.read_all()
+            if remaining:
+                bridge.send_audio(remaining)
+            bridge.finish_sending()
+
+        # 松手时 _last_asr_text 已有最新识别结果（流式实时更新）
+        # 不依赖 finish 事件，直接注入，与 P7 验收方案一致
+        text = self._last_asr_text.strip()
+        print(f"[App] 注入文本: {text!r}")
+        if text and target_hwnd:
+            self.status.show_status("done")
+            _post_text(target_hwnd, text)
+        elif not text:
+            self.status.show_status("idle")
+
+        self._last_asr_text = ""
 
     def _on_hotkey_conflict(self, message: str) -> None:
-        """热键注册失败时通知用户。"""
         self.tray.show_message("热键冲突", message)
+
+    # ------------------------------------------------------------------
+    # P8: 音频 → ASR 流式推送（QTimer 每 100ms 触发）
+    # ------------------------------------------------------------------
+
+    def _push_audio_to_asr(self) -> None:
+        """定时从缓冲区读取音频块并推送给 ASR 桥接。"""
+        bridge = self._asr_bridge
+        if bridge is None:
+            return
+        chunk = self.audio_buffer.read_all()
+        if chunk:
+            bridge.send_audio(chunk)
+
+    # ------------------------------------------------------------------
+    # P8: ASR 回调
+    # ------------------------------------------------------------------
+
+    def _on_asr_result(self, text: str) -> None:
+        """收到流式识别结果（可能多次调用，每次是最新完整文本）。"""
+        print(f"[App] ASR 结果: {text!r}")
+        self._last_asr_text = text
+
+    def _on_asr_finish(self) -> None:
+        """ASR 识别完成，注入最终文本。"""
+        text = self._last_asr_text.strip()
+        print(f"[App] ASR 完成，最终文本: {text!r}")
+
+        if text:
+            self.status.show_status("done")
+            if self._pending_target_hwnd:
+                _post_text(self._pending_target_hwnd, text)
+            else:
+                print("[App] 无目标窗口句柄，跳过注入")
+        else:
+            self.status.show_status("error", "未识别到语音")
+            print("[App] 识别结果为空")
+
+        self._pending_target_hwnd = 0
+        self._last_asr_text = ""
+
+    def _on_asr_error(self, msg: str) -> None:
+        print(f"[App] ASR 错误: {msg}")
+        self.status.show_status("error")
+        self._pending_target_hwnd = 0
+
+    def _on_asr_auth_error(self) -> None:
+        print("[App] ASR 认证失败，凭证已过期")
+        self.status.show_status("error", "请重新登录")
+        self.settings.auth_token = None
+        self.settings.auth_expiry = None
+        self.tray.show_message("豆包桌宠", "登录已过期，请重新登录豆包")
+        self._asr_bridge = None
+        self._pending_target_hwnd = 0
+
+    # ------------------------------------------------------------------
+    # P8: ASR 桥接 — 延迟初始化
+    # ------------------------------------------------------------------
+
+    def _get_or_create_bridge(self):
+        """获取 ASR 桥接实例；若 WebView 不存在则无法创建，返回 None。"""
+        if self._asr_bridge is not None:
+            return self._asr_bridge
+
+        # 从 pet_window 的登录对话框获取后台 WebView
+        if self._auth_webview is not None:
+            self._asr_bridge = self._auth_webview.get_bridge()
+            return self._asr_bridge
+
+        print("[App] 尚未登录豆包，无法创建 ASR 桥接")
+        return None
 
     # ------------------------------------------------------------------
     # P3: 登录 & 凭证管理
     # ------------------------------------------------------------------
 
     def _on_login_completed(self) -> None:
-        """登录成功后刷新托盘提示。"""
+        """登录成功后，获取 AuthWebView 实例以供后续桥接使用。"""
         self.tray.show_message("登录成功", "豆包凭证已保存，有效期 7 天")
         print("[App] 登录完成，凭证已保存")
+        # 从 pet_window 中取回 AuthWebView 引用
+        self._auth_webview = getattr(self.pet_window, "_last_auth_webview", None)
 
     def _check_auth_expiry(self) -> None:
-        """检查凭证是否过期，过期则弹出托盘通知。"""
         expiry_str = self.settings.auth_expiry
         if not expiry_str:
             return
-
         try:
             expiry = datetime.fromisoformat(expiry_str)
         except (ValueError, TypeError):
             return
-
         now = datetime.now(timezone.utc)
         if now > expiry:
             print("[App] 凭证已过期")
             self.settings.auth_token = None
             self.settings.auth_expiry = None
-            self.tray.show_message(
-                "豆包桌宠",
-                "登录已过期，请重新登录豆包",
-            )
+            self.tray.show_message("豆包桌宠", "登录已过期，请重新登录豆包")

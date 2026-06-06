@@ -245,12 +245,10 @@ _ASR_BRIDGE_JS = """
         flushAudio();
         audioBuffer = [];
         if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
-        // 发一帧空 PCM 作为 EOF 标志，再关闭 WS，触发服务端 finish 事件
+        // 发一帧空 PCM 作为 EOF 标志，等服务端返回 finish 事件后再关闭 WS
+        // 不主动 close，避免 finish 事件在 close 之后才到而丢失
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(new ArrayBuffer(0));
-            setTimeout(function() {
-                if (ws && ws.readyState === WebSocket.OPEN) ws.close(1000, 'done');
-            }, 300);
         }
     }
 
