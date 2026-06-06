@@ -80,6 +80,10 @@ class DoubaoPetApp:
 
         self._check_auth_expiry()
 
+        # 有有效凭证时自动在后台静默创建 WebView，无需用户手动重新登录
+        if self.settings.auth_token:
+            self._auto_init_webview()
+
         if self.settings.first_run:
             self.settings.first_run = False
             print("[App] 首次运行，已标记 first_run = False")
@@ -238,13 +242,27 @@ class DoubaoPetApp:
         if self._asr_bridge is not None:
             return self._asr_bridge
 
-        # 从 pet_window 的登录对话框获取后台 WebView
         if self._auth_webview is not None:
             self._asr_bridge = self._auth_webview.get_bridge()
             return self._asr_bridge
 
         print("[App] 尚未登录豆包，无法创建 ASR 桥接")
         return None
+
+    def _auto_init_webview(self) -> None:
+        """启动时自动在后台静默创建 WebView，复用已有 profile session。
+
+        用户上次登录的 session 由 QWebEngineProfile("doubao-pet") 持久化在
+        磁盘上，Chromium 启动时自动加载，不需要用户重新登录。
+        """
+        from auth_webview import AuthWebView
+        print("[App] 检测到有效凭证，自动在后台初始化 WebView...")
+        dlg = AuthWebView(self.settings, keep_alive=True)
+        dlg._extracted = True          # 跳过登录检测
+        dlg._poll_timer.stop()
+        dlg._move_to_background()
+        self._auth_webview = dlg
+        print("[App] 后台 WebView 已就绪，可直接使用语音功能")
 
     # ------------------------------------------------------------------
     # P3: 登录 & 凭证管理
