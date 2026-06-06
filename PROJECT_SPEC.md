@@ -358,128 +358,82 @@ src/
 
 ---
 
-## P6 — 全局热键 右Shift
+## P6 — 全局热键 右Ctrl
 
 ### 目标
-监听右 Shift 键的全局按下/释放事件，控制录音的开始和停止。与 P2 的语音开关状态联动。
+监听右 Ctrl 键的全局按下/释放事件，控制录音的开始和停止。与 P2 的语音开关状态联动。
 
-**不使用任何键盘钩子（hook）**，采用 `RegisterHotKey` + `GetAsyncKeyState` 方案，
-从根本上消除杀软误报风险。
+使用 `pynput` 库监听全局键盘事件，在独立线程中运行，通过 Qt Signal 跨线程通知主线程。
 
-### 为什么右 Shift？
+### 为什么右 Ctrl？
 
 ```
-右Shift 在绝大多数应用中无绑定 → 几乎不会热键冲突
-左Shift 被大量应用占用（输入法切换、游戏奔跑键等）
-单独一个键 → RegisterHotKey 的 MOD_NOREPEAT 天然防止按键重复触发
-不是组合键 → 用户单手操作，另一只手可以继续敲键盘
+右Shift 被排除的原因：
+  - 长按 8 秒触发 Windows 粘滞键提示，打断录音
+  - 部分输入法（搜狗等）用右Shift切换中英文，产生冲突
+
+右Ctrl 的优势：
+  - Windows 没有任何长按右Ctrl的系统行为
+  - 短按/长按/连按均不触发任何系统功能
+  - 绝大多数应用不绑定单独的右Ctrl
+  - 用户单手可操作，另一只手可以继续敲键盘
 ```
 
 ### 技术原理
 
 ```
-┌─ 按下右Shift ──────────────────────────────────────────┐
-│                                                          │
-│ ① RegisterHotKey 收到 WM_HOTKEY                         │
-│    (系统通知，不拦截任何键盘事件——杀软不管)               │
-│                                                          │
-│ ② 启动 200ms 计时器 + 释放检测线程                       │
-│    GetAsyncKeyState(VK_RSHIFT) 每 50ms 轮询              │
-│                                                          │
-│ ③ 若 200ms 内释放 → 这是一次普通按键 → 取消              │
-│    若超过 200ms    → 录音指令 → AudioCapture.start()     │
-│                                                          │
-│ ④ 释放检测线程持续轮询                                    │
-│    检测到 GetAsyncKeyState(VK_RSHIFT) >= 0 → 松手        │
-│    → AudioCapture.stop() → 触发 WebSocket 转录           │
-│                                                          │
-│ ⑤ 超时保护: 连续录音 > 30 秒 → 自动停止                  │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
-
-### 为什么杀软不报
-
-```
-RegisterHotKey  → 截图工具(QQ/微信/OBS)的标准 API → 杀软白名单习惯
-GetAsyncKeyState → 游戏/录屏软件的标准 API        → 杀软不管
-不注册 WH_KEYBOARD_LL 钩子 → 没有 keylogger 特征   → 启发式检测不触发
+┌─ 按下右Ctrl ──────────────────────────────────────────┐
+│                                                         │
+│ ① pynput Listener.on_press 收到 Key.ctrl_r             │
+│    (独立线程，不阻塞 Qt 事件循环)                        │
+│                                                         │
+│ ② 启动 200ms 计时线程                                   │
+│    等待 _stop_event 或超时                              │
+│                                                         │
+│ ③ 若 200ms 内松手（on_release 触发 _stop_event）→ 取消  │
+│    若超过 200ms → 录音指令 → recording_started Signal   │
+│                                                         │
+│ ④ 持续等待松手（_stop_event）或 30 秒超时               │
+│    → recording_stopped Signal                           │
+│                                                         │
+│ ⑤ 超时保护: 连续录音 > 30 秒 → 自动停止，数据完整保留   │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### 具体任务
 
 1. 编写 `hotkey.py`：`HotkeyManager` 类
-   ```python
-   # 核心 API 调用（伪代码）
-   import win32gui, win32con, win32api
-
-   class HotkeyManager:
-       HOTKEY_ID = 1
-       HOLD_THRESHOLD_MS = 200       # 短按忽略阈值
-       POLL_INTERVAL_MS = 50         # 释放检测轮询间隔
-       MAX_RECORD_SECONDS = 30       # 最大录音时长（超时保护）
-
-       def register(self, hwnd):
-           """注册全局热键 右Shift"""
-           # MOD_NOREPEAT: 按住不重复触发
-           # VK_RSHIFT: 右Shift虚拟键码
-           win32gui.RegisterHotKey(
-               hwnd, self.HOTKEY_ID,
-               win32con.MOD_NOREPEAT,
-               win32con.VK_RSHIFT
-           )
-
-       def unregister(self, hwnd):
-           """注销热键（程序退出时调用）"""
-           win32gui.UnregisterHotKey(hwnd, self.HOTKEY_ID)
-
-       def is_rshift_held(self):
-           """检测右Shift是否仍被按住"""
-           return win32api.GetAsyncKeyState(win32con.VK_RSHIFT) < 0
-
-       # Qt 集成: 在 nativeEvent 中捕获 WM_HOTKEY
-       # def nativeEvent(self, eventType, message):
-       #     if message.message == win32con.WM_HOTKEY:
-       #         self._on_hotkey_pressed()
-   ```
-   - 状态机：`IDLE` → `HOTKEY_PRESSED` → `WAITING_THRESHOLD` → `RECORDING` → `AWAIT_RELEASE` → `IDLE`
-   - 在单独 QThread 中轮询释放状态（不阻塞 Qt 事件循环）
+   - 使用 `pynput.keyboard.Listener` 监听全局键盘事件
+   - 状态机：`IDLE` → `WAITING_THRESHOLD` → `RECORDING` → `IDLE`
    - Qt Signal 定义：
      - `recording_started = Signal()` — 长按确认，开始录音
-     - `recording_stopped = Signal()` — 松手确认，停止录音
-     - `hotkey_conflict = Signal(str)` — 热键注册失败，通知冲突
+     - `recording_stopped = Signal()` — 松手或超时，停止录音
+     - `hotkey_conflict = Signal(str)` — 保留接口兼容，pynput 方案不触发
 
-2. 热键冲突处理：
-   - `RegisterHotKey` 返回 0（注册失败）
-   - → 发送 `hotkey_conflict` 信号
-   - → 托盘气泡：「热键 右Shift 已被其他程序占用，请在设置中更换」
-   - → 提供备选热键列表：`ScrollLock`、`F2`、`Pause` 等冷门键
+2. 与 P2 联动：
+   - `voice_enabled == False` → 按下右Ctrl 记录日志但忽略
+   - `auth_token == None` → 按下右Ctrl 忽略 + 托盘气泡「请先登录豆包」
 
-3. 与 P2 联动：
-   - `voice_enabled == False` → 收到 WM_HOTKEY 仍记录日志但忽略
-   - `auth_token == None` → 收到 WM_HOTKEY 仍忽略 + 托盘气泡「请先登录豆包」
-
-4. 与 P4 联动：
+3. 与 P4 联动：
    - `recording_started` → 调用 `AudioCapture.start()`
    - `recording_stopped` → 调用 `AudioCapture.stop()` → 获取缓冲区音频数据
 
-5. 短按过滤：
-   - 按下右Shift → 启动 200ms 定时器
-   - 若 200ms 内释放 → 这是一次普通按键 → 取消，不触发任何录音逻辑
-   - 正常打字永远不会碰到右Shift → 不存在误触问题
+4. 短按过滤：
+   - 按下右Ctrl → 启动 200ms 计时
+   - 若 200ms 内松手 → 取消，不触发任何录音逻辑
 
 ### 验收标准
 
-- [ ] 在任何应用前台都能捕获右Shift 按下（WM_HOTKEY 触发）
-- [ ] 语音未开启时 → 按右Shift 无录音行为（日志记录热键事件被忽略）
-- [ ] 未登录豆包时 → 按右Shift 无录音行为 + 托盘提示
-- [ ] 语音已开启 + 已登录 → 按住右Shift > 200ms → 录音开始
-- [ ] 释放右Shift → 录音停止 → 转录流程自动触发
-- [ ] 短按右Shift（< 200ms）→ 不触发录音，行为一致
-- [ ] 长时间按住右Shift（> 30 秒）→ 自动停止录音（超时保护）
-- [ ] 正常打字（左Shift、字母键）→ 完全不触发热键
-- [ ] 热键注册失败时 → 托盘通知冲突 + 引导用户换键
-- [ ] 程序退出时热键正确注销（不残留注册）
+- [x] 在任何应用前台都能捕获右Ctrl 按下
+- [x] 语音未开启时 → 按右Ctrl 无录音行为（日志「语音未开启，忽略热键」）
+- [x] 未登录豆包时 → 按右Ctrl 无录音行为 + 托盘提示「请先登录豆包」
+- [x] 语音已开启 + 已登录 → 按住右Ctrl > 200ms → 录音开始
+- [x] 释放右Ctrl → 录音停止
+- [x] 短按右Ctrl（< 200ms）→ 不触发录音
+- [x] 长时间按住右Ctrl（> 30 秒）→ 自动停止，缓冲区数据完整保留
+- [x] 正常打字 → 完全不触发热键日志
+- [x] 程序退出时热键正确注销
 
 ### 预期文件
 
