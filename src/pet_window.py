@@ -169,10 +169,11 @@ class PetWindow(QWidget):
         menu.login_requested.connect(self._on_login_requested)
         menu.quit_requested.connect(QApplication.instance().quit)
 
-        # 在鼠标点击位置弹出菜单
-        cursor_pos = self.cursor().pos()
-        global_pos = self.mapToGlobal(cursor_pos)
-        menu.show_at(global_pos)
+        # 菜单弹在桌宠右下角，紧贴不覆盖
+        pet_rect = self.frameGeometry()
+        x = pet_rect.right()
+        y = pet_rect.bottom()
+        menu.show_at(QPoint(x, y))
 
     def _on_voice_toggled(self, enabled: bool) -> None:
         """语音开关切换后刷新指示器并转发信号。"""
