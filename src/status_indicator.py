@@ -32,6 +32,7 @@ class StatusIndicator(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._pet_window = None
         self._auto_hide_timer = QTimer(self)
         self._auto_hide_timer.setSingleShot(True)
         self._auto_hide_timer.timeout.connect(self._fade_out)
@@ -43,7 +44,9 @@ class StatusIndicator(QWidget):
         self._fading_out = False
 
         self._setup_ui()
-        self._position_bottom_center()
+
+    def set_pet_window(self, pet_window) -> None:
+        self._pet_window = pet_window
 
     def _setup_ui(self) -> None:
         self.setWindowFlags(
@@ -68,7 +71,15 @@ class StatusIndicator(QWidget):
 
         self.setFixedWidth(220)
 
-    def _position_bottom_center(self) -> None:
+    def _position_above_pet(self) -> None:
+        """定位到桌宠上方居中；无桌宠引用时回退到屏幕底部居中。"""
+        if self._pet_window is not None:
+            pet_rect = self._pet_window.frameGeometry()
+            x = pet_rect.center().x() - self.width() // 2
+            y = pet_rect.top() - self.height() - 8
+            self.move(x, y)
+            return
+        # 回退
         screen = QApplication.primaryScreen()
         if screen is None:
             self.move(600, 800)
@@ -107,7 +118,7 @@ class StatusIndicator(QWidget):
         self._label.setText(text)
         self._set_color(color)
         self.adjustSize()
-        self._position_bottom_center()
+        self._position_above_pet()
 
         # 淡入
         self._fade_anim.stop()

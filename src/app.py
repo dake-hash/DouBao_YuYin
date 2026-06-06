@@ -53,6 +53,7 @@ class DoubaoPetApp:
 
         # ── P8: 状态浮窗 ────────────────────────────────────────
         self.status = StatusIndicator()
+        self.status.set_pet_window(self.pet_window)
 
         # ── P6: 全局热键 ────────────────────────────────────────
         self.hotkey = HotkeyManager()
@@ -128,6 +129,7 @@ class DoubaoPetApp:
         print("[App] 录音开始")
         self.audio_buffer.clear()
         self.audio_capture.start()
+        self.pet_window.animation.play("listening")
         self.status.show_status("listening")
 
         bridge = self._get_or_create_bridge()
@@ -155,6 +157,7 @@ class DoubaoPetApp:
         print("[App] 录音停止")
         self._stream_timer.stop()
         self.audio_capture.stop()
+        self.pet_window.animation.play("idle")
         self.status.show_status("thinking")
 
         bridge = self._asr_bridge

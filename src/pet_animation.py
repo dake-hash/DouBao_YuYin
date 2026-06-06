@@ -24,9 +24,9 @@ class PetAnimation:
     """
 
     STATE_FILES = {
-        "idle":      ["pet_idle.gif",      "pet_idle.png"],
-        "listening": ["pet_listening.gif", "pet_listening.png"],
-        "thinking":  ["pet_thinking.gif",  "pet_thinking.png"],
+        "idle":      ["pet_idle.gif",  "pet.gif",         "pet_idle.png"],
+        "listening": ["listen.gif",    "pet_listening.gif", "listen.png"],
+        "thinking":  ["pet_thinking.gif", "think.png"],
     }
 
     def __init__(self, parent: QWidget) -> None:
