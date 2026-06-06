@@ -43,6 +43,7 @@ class DoubaoPetApp:
         self.pet_window = PetWindow(settings=self.settings)
         self.pet_window.voice_toggled.connect(self._on_voice_toggled)
         self.pet_window.login_completed.connect(self._on_login_completed)
+        self.pet_window.login_requested.connect(self._on_login_requested)
         self.pet_window.show()
 
         # ── 系统托盘 ────────────────────────────────────────────
@@ -271,12 +272,37 @@ class DoubaoPetApp:
     # P3: 登录 & 凭证管理
     # ------------------------------------------------------------------
 
-    def _on_login_completed(self) -> None:
-        """登录成功后，获取 AuthWebView 实例以供后续桥接使用。"""
+    def _on_login_requested(self) -> None:
+        """处理登录请求：先销毁旧后台 WebView，再弹出登录窗口。
+
+        必须在 app 层处理，因为 QWebEngineProfile("doubao-pet") 是进程级单例，
+        同时存在两个绑定该 profile 的 WebView 会导致新窗口全白无法交互。
+        """
+        from auth_webview import AuthWebView
+
+        # 先销毁后台 WebView，释放 profile 占用
+        if self._auth_webview is not None:
+            print("[App] 销毁旧后台 WebView，准备重新登录...")
+            self._auth_webview.destroy_background()
+            self._auth_webview = None
+            self._asr_bridge = None
+
+        dlg = AuthWebView(self.settings, self.pet_window)
+        dlg.login_completed.connect(lambda: self._on_auth_dialog_accepted(dlg))
+        dlg.exec()
+
+    def _on_auth_dialog_accepted(self, dlg) -> None:
+        """登录弹窗完成后更新引用并通知其他模块。"""
+        self._auth_webview = dlg
+        self._asr_bridge = None  # 下次录音时重新从新 WebView 取 bridge
+        self.pet_window.update()
+        self.pet_window.login_completed.emit()
         self.tray.show_message("登录成功", "豆包凭证已保存，有效期 7 天")
-        print("[App] 登录完成，凭证已保存")
-        # 从 pet_window 中取回 AuthWebView 引用
-        self._auth_webview = getattr(self.pet_window, "_last_auth_webview", None)
+        print("[App] 登录完成，凭证已保存，新 WebView 已就绪")
+
+    def _on_login_completed(self) -> None:
+        """保留此信号槽供 pet_window.login_completed 转发时使用。"""
+        pass
 
     def _check_auth_expiry(self) -> None:
         expiry_str = self.settings.auth_expiry

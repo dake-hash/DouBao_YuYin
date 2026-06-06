@@ -39,6 +39,7 @@ class PetWindow(QWidget):
 
     voice_toggled = Signal(bool)
     login_completed = Signal()
+    login_requested = Signal()  # P8 fix: 上移到 app 层处理，避免 profile 冲突
 
     def __init__(self, settings=None, size: int = 200) -> None:
         super().__init__()
@@ -182,12 +183,5 @@ class PetWindow(QWidget):
         print(f"[PetWindow] 语音{'已开启' if enabled else '已关闭'}")
 
     def _on_login_requested(self) -> None:
-        """打开豆包登录窗口，完成后重绘指示器并转发信号。"""
-        from auth_webview import AuthWebView
-
-        dlg = AuthWebView(self._settings, self)
-        self._last_auth_webview = dlg  # P8: 供 app.py 获取桥接实例
-        if dlg.exec() == AuthWebView.DialogCode.Accepted:
-            self.update()  # 指示器状态可能变化
-            self.login_completed.emit()
-            print("[PetWindow] 登录完成")
+        """转发登录请求到 app 层处理，避免 QWebEngineProfile 冲突。"""
+        self.login_requested.emit()
