@@ -4,7 +4,8 @@ app.py — 应用生命周期管理
 P0: DoubaoPetApp 负责创建 QApplication、初始化托盘、管理应用启动/退出。
 P1: 集成 PetWindow（透明置顶桌宠窗口）。
 P4: 集成 AudioCapture + AudioBuffer 麦克风采集。
-P6: 集成 HotkeyManager 全局热键（右Shift 长按）。
+P6: 集成 HotkeyManager 全局热键（右Ctrl 长按）。
+P7: 集成 TextOutput 文本注入到活动窗口。
 """
 
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from audio_capture import AudioCapture
 from hotkey import HotkeyManager
 from pet_window import PetWindow
 from settings import Settings
+from text_output import TextOutput
 from tray import TrayIcon
 
 
@@ -56,13 +58,19 @@ class DoubaoPetApp:
         self.tray.quit_requested.connect(self.quit)
         self.tray.show()
 
-        # ── P6: 全局热键（右Shift 长按）─────────────────────────
+        # ── P6: 全局热键（右Ctrl 长按）─────────────────────────
         self.hotkey = HotkeyManager()
         self.hotkey.set_settings(self.settings)
         self.hotkey.set_tray(self.tray)
         self.hotkey.recording_started.connect(self._on_recording_started)
         self.hotkey.recording_stopped.connect(self._on_recording_stopped)
         self.hotkey.hotkey_conflict.connect(self._on_hotkey_conflict)
+
+        # ── P7: 文本注入 ────────────────────────────────────────
+        self.text_output = TextOutput()
+        # 注入在 pynput 线程里松手瞬间直接调用，绕开 Qt queued signal 的异步延迟
+        self.hotkey.set_inject_fn(self.text_output._paste_via_sendinput)
+
         self.hotkey.register()
 
         # P3: 启动时检查凭证是否过期
@@ -109,12 +117,12 @@ class DoubaoPetApp:
     # ------------------------------------------------------------------
 
     def _on_recording_started(self) -> None:
-        """右Shift 长按确认 → 开始麦克风采集。"""
+        """右Ctrl 长按确认 → 开始麦克风采集。"""
         self.audio_buffer.clear()
         self.audio_capture.start()
 
     def _on_recording_stopped(self) -> None:
-        """松手 / 超时 → 停止麦克风采集，打印缓冲区统计。"""
+        """松手 / 超时 → 停止麦克风采集，打印缓冲区统计。文本注入已在 pynput 线程完成。"""
         self.audio_capture.stop()
         available = self.audio_buffer.available_bytes
         print(f"[App] 录音结束，缓冲区数据: {available} bytes "

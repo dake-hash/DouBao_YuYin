@@ -1,25 +1,21 @@
 """
-hotkey.py — 全局热键监听（右Shift 长按）
+hotkey.py — 全局热键监听（右Ctrl 长按录音）
 
 P6: 使用 pynput 监听键盘事件。
-在独立线程中运行 pynput Listener，通过 Qt Signal 跨线程通知主线程。
+P7: 长按触发，松手停止。用 PostMessage WM_CHAR 直接投递文本到目标窗口，不依赖焦点。
 
-状态机:
-    IDLE → WAITING_THRESHOLD → RECORDING → IDLE
-
-用法:
-    mgr = HotkeyManager()
-    mgr.set_settings(settings)
-    mgr.set_tray(tray_icon)
-    mgr.register()
-
-    mgr.recording_started.connect(audio_capture.start)
-    mgr.recording_stopped.connect(audio_capture.stop)
+逻辑：
+    按下右Ctrl → 记录目标窗口，启动 200ms 计时
+    200ms 内松手  → 短按，取消
+    超过 200ms 未松手 → 开始录音
+    松手 → 停止录音，注入文本
+    录音超过 30 秒 → 自动停止，注入文本
 """
 
+import ctypes
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Signal
 
@@ -29,18 +25,39 @@ try:
 except ImportError:
     HAS_PYNPUT = False
 
+_user32 = ctypes.windll.user32
+WM_CHAR = 0x0102
+
+
+def _get_focus_child(hwnd: int) -> int:
+    """通过 AttachThreadInput 获取目标窗口的焦点子窗口句柄。"""
+    current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+    target_tid = _user32.GetWindowThreadProcessId(hwnd, None)
+    if target_tid and target_tid != current_tid:
+        _user32.AttachThreadInput(current_tid, target_tid, True)
+        try:
+            child = _user32.GetFocus()
+            return child if child else hwnd
+        finally:
+            _user32.AttachThreadInput(current_tid, target_tid, False)
+    return hwnd
+
+
+def _post_text(hwnd: int, text: str) -> None:
+    """直接向目标窗口投递字符，不依赖焦点。"""
+    target = _get_focus_child(hwnd)
+    for ch in text:
+        _user32.PostMessageW(target, WM_CHAR, ord(ch), 0)
+        time.sleep(0.002)
+
 
 class HotkeyManager(QObject):
-    """右Shift 长按热键管理器。
-
-    pynput Listener 在独立线程中监听全局键盘事件。
-    按下右Shift → 启动 200ms 计时；超过阈值 → recording_started。
-    松手 → recording_stopped。超过 30 秒 → 自动停止。
+    """右Ctrl 长按录音管理器。
 
     信号:
         recording_started:  长按确认，开始录音
         recording_stopped:  松手或超时，停止录音
-        hotkey_conflict(str): 热键注册失败（本方案不会触发，保留接口兼容）
+        hotkey_conflict(str): 保留接口兼容
     """
 
     recording_started = Signal()
@@ -63,8 +80,10 @@ class HotkeyManager(QObject):
         self._poll_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._press_time: Optional[float] = None
+        self._target_hwnd: int = 0
         self._settings = None
         self._tray = None
+        self._inject_fn: Optional[Callable[[str], None]] = None
 
     # ------------------------------------------------------------------
     # 依赖注入
@@ -75,6 +94,9 @@ class HotkeyManager(QObject):
 
     def set_tray(self, tray) -> None:
         self._tray = tray
+
+    def set_inject_fn(self, fn: Callable[[str], None]) -> None:
+        self._inject_fn = fn
 
     # ------------------------------------------------------------------
     # 注册 / 注销
@@ -103,12 +125,14 @@ class HotkeyManager(QObject):
             self._listener.stop()
             self._listener = None
         self._registered = False
-        self._stop_polling()
+        self._stop_event.set()
+        if self._poll_thread is not None and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=1.0)
         self._state = self.IDLE
         print("[Hotkey] 热键已注销")
 
     # ------------------------------------------------------------------
-    # pynput 回调（在 pynput 线程中执行）
+    # pynput 回调
     # ------------------------------------------------------------------
 
     def _on_press(self, key) -> None:
@@ -128,6 +152,9 @@ class HotkeyManager(QObject):
                 self._tray.show_message("豆包桌宠", "请先登录豆包")
             return
 
+        # 按键前记录目标窗口（此时焦点还在用户的目标窗口）
+        self._target_hwnd = _user32.GetForegroundWindow()
+
         self._state = self.WAITING_THRESHOLD
         self._press_time = time.monotonic()
         self._stop_event.clear()
@@ -139,7 +166,6 @@ class HotkeyManager(QObject):
     def _on_release(self, key) -> None:
         if key != _kb.Key.ctrl_r:
             return
-        # 通知轮询线程键已松开
         self._stop_event.set()
 
     # ------------------------------------------------------------------
@@ -162,7 +188,7 @@ class HotkeyManager(QObject):
         # 阶段 2: 开始录音
         self._state = self.RECORDING
         self.recording_started.emit()
-        print("[Hotkey] ✓ 长按确认，开始录音")
+        print("[Hotkey] 长按确认，开始录音")
 
         recording_start = time.monotonic()
 
@@ -176,18 +202,16 @@ class HotkeyManager(QObject):
         if not (time.monotonic() - recording_start >= self.MAX_RECORD_SECONDS):
             print("[Hotkey] 松手，停止录音")
 
-        # 阶段 4: 停止录音
+        # 阶段 4: 停止录音，直接投递文本到目标窗口
         self._state = self.IDLE
         self.recording_stopped.emit()
+
+        if self._inject_fn is not None and self._target_hwnd:
+            _post_text(self._target_hwnd, "P7验收：文本注入测试")
 
     # ------------------------------------------------------------------
     # 清理
     # ------------------------------------------------------------------
-
-    def _stop_polling(self) -> None:
-        self._stop_event.set()
-        if self._poll_thread is not None and self._poll_thread.is_alive():
-            self._poll_thread.join(timeout=1.0)
 
     def cleanup(self) -> None:
         self.unregister()

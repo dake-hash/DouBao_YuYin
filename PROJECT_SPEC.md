@@ -458,41 +458,30 @@ src/
 ## P7 — 文本输出到活动窗口
 
 ### 目标
-将 P5 接收到的转录文本，注入到当前活动窗口的输入框中（即 CLI 输入框）。
+将 ASR 转录文本注入到用户当前使用的输入框中。
 
 ### 技术要点
-- 多种注入策略，按优先级尝试：
-  1. **剪贴板粘贴**（最可靠）：复制文本→ `Ctrl+V` → 恢复原剪贴板
-  2. **SendInput API**（备选）：模拟逐字键盘输入
-  3. **WM_SETTEXT**（最后手段）：直接设置窗口文本
-- 使用 `pywin32` 调用 Win32 API
-- 注入前保存并恢复剪贴板内容
+- 按下热键前用 `GetForegroundWindow()` 记录目标窗口句柄
+- 用 `AttachThreadInput` + `GetFocus` 获取目标窗口内的焦点子控件
+- 用 `PostMessage WM_CHAR` 逐字符直接投递到目标控件的消息队列
+- 完全不依赖焦点状态，不影响剪贴板内容
+- PowerShell 不兼容（使用 DirectComposition 渲染，WM_CHAR 无效）；Claude Code CLI、VS Code 终端、记事本等主流环境均兼容
 
 ### 具体任务
 1. 编写 `text_output.py`：`TextOutput` 类
-   - `output(text: str)` → 自动选择最佳策略输出
-   - `_paste_via_clipboard(text)` → 剪贴板方案
-     - 保存当前剪贴板内容
-     - 写入新文本到剪贴板
-     - 模拟 `Ctrl+V`
-     - 延迟 100ms 后恢复原剪贴板
-   - `_paste_via_sendinput(text)` → SendInput 方案
-     - 将文本转为键盘扫描码序列
-     - 调用 `SendInput` API
-     - 处理 Unicode 字符（中文等）
-   - `get_active_window()` → 获取当前焦点窗口句柄
-2. 支持「输入后自动回车」选项（可配置）
-3. 输出日志：记录每次输出的文本和时间
+   - `_get_focus_child(hwnd)` → 通过 AttachThreadInput 获取焦点子窗口句柄
+   - `_post_text(hwnd, text)` → 逐字符 PostMessage WM_CHAR 到目标窗口
+   - `_paste_via_sendinput(text)` → SendInput Unicode 备用方案
+2. `hotkey.py` 在 `_on_press` 时记录 `GetForegroundWindow()`，松手后直接调用 `_post_text`
 
 ### 验收标准
-- [ ] 转录完成后文字自动出现在当前焦点输入框
-- [ ] 支持中英文混合文本
-- [ ] 注入后用户原剪贴板内容不丢失
-- [ ] 在以下环境中测试通过：
-  - Windows Terminal (PowerShell / CMD)
-  - Claude Code CLI 输入框
-  - VS Code 终端
-  - 记事本（基准测试）
+- [x] 转录完成后文字自动出现在目标输入框
+- [x] 支持中英文混合文本
+- [x] 注入后剪贴板内容不丢失
+- [x] Claude Code CLI 输入框测试通过
+- [x] VS Code 终端测试通过
+- [x] 记事本测试通过
+- [ ] PowerShell 暂不支持（已知限制，后续考虑）
 
 ### 预期文件
 ```

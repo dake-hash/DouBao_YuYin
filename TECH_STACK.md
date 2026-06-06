@@ -36,7 +36,7 @@
 | 组件 | 选型 | 用途 | 备注 |
 |------|------|------|------|
 | 全局热键 | pynput | 监听右Ctrl 长按/松手 | 独立线程运行，通过 Qt Signal 跨线程通知；WH_KEYBOARD_LL 底层，无需管理员权限 |
-| 文本注入 | pywin32 | 剪贴板操作 / SendInput 模拟输入 | Win32 API Python 封装 |
+| 文本注入 | PostMessage WM_CHAR + AttachThreadInput | 直接投递字符到目标窗口，不依赖焦点，不影响剪贴板 | PowerShell 不兼容（DirectComposition 渲染）|
 | 窗口管理 | pywin32 (win32gui) | 获取活动窗口句柄 | 注入文本前确认目标窗口 |
 
 ## 数据持久化
