@@ -25,10 +25,14 @@ cd DouBao_YuYin
 python -m venv venv
 venv\Scripts\activate
 
-# 3. 安装依赖
+# 3. 安装 PyAudio（Windows 需单独处理）
+pip install pipwin
+pipwin install pyaudio
+
+# 4. 安装其余依赖
 pip install -r requirements.txt
 
-# 4. 运行
+# 5. 运行
 python src/main.py
 ```
 
