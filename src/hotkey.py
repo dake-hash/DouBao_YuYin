@@ -138,9 +138,9 @@ class HotkeyManager(QObject):
     def _on_press(self, key) -> None:
         if key != _kb.Key.ctrl_r:
             return
-        print("[Hotkey] 识别到按键")
         if self._state != self.IDLE:
             return
+        print("[Hotkey] 识别到按键")
 
         if self._settings is not None and not self._settings.voice_enabled:
             print("[Hotkey] 语音未开启，忽略热键")
