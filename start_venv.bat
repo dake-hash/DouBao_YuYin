@@ -18,21 +18,31 @@ if %PYMAJOR% EQU 3 if %PYMINOR% LSS 10 goto install_python
 goto create_venv
 
 :install_python
-echo Downloading Python 3.12.9 installer...
-curl -L -o "C:\python-3.12.9-amd64.exe" "https://mirrors.huaweicloud.com/python/3.12.9/python-3.12.9-amd64.exe"
+:: Check if bundled installer exists in runtime\
+set INSTALLER=
+for %%f in ("%~dp0runtime\python-*.exe") do set INSTALLER=%%f
+
+if defined INSTALLER (
+    echo Found bundled Python installer: %INSTALLER%
+) else (
+    echo No bundled installer found, downloading Python 3.13.2...
+    curl -L -o "%TEMP%\python-3.13.2-amd64.exe" "https://www.python.org/ftp/python/3.13.2/python-3.13.2-amd64.exe"
+    if %errorlevel% neq 0 (
+        echo Download failed. Please download Python from https://www.python.org/downloads/
+        pause
+        exit /b 1
+    )
+    set INSTALLER=%TEMP%\python-3.13.2-amd64.exe
+)
+
+echo Installing Python...
+"%INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
 if %errorlevel% neq 0 (
-    echo Download failed. Please download Python 3.12 from https://www.python.org/downloads/
+    echo Installation failed. Please install Python manually.
     pause
     exit /b 1
 )
-echo Installing Python 3.12.9...
-"C:\python-3.12.9-amd64.exe" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
-if %errorlevel% neq 0 (
-    echo Installation failed. Please install Python 3.12 manually.
-    pause
-    exit /b 1
-)
-echo Python 3.12.9 installed. Please close this window and run start_venv.bat again.
+echo Python installed. Please close this window and run start_venv.bat again.
 pause
 exit /b 0
 
@@ -46,7 +56,7 @@ call venv\Scripts\activate.bat
 
 echo Checking dependencies...
 
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+pip install -r requirements.txt --index-url https://pypi.org/simple/
 if %errorlevel% neq 0 (
     echo Dependency installation failed. Check your network or run: pip install -r requirements.txt
     pause
