@@ -428,9 +428,14 @@ class WebViewASRBridge(QObject):
             self._bridge_obj.connectASR.emit(url, cookie, preload_b64)
 
     def _handle_result(self, text: str) -> None:
-        print(f"[WebViewASRBridge] 识别: {text}")
+        self._last_result = text
         if self.on_result:
             self.on_result(text)
+
+    def _handle_finish(self) -> None:
+        if hasattr(self, '_last_result') and self._last_result:
+            print(f"[WebViewASRBridge] 识别: {self._last_result}")
+            self._last_result = ""
 
     def _handle_finish(self) -> None:
         print("[WebViewASRBridge] finish 事件")

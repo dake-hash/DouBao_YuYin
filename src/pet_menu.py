@@ -148,7 +148,7 @@ class PetMenu(QMenu):
             self.parent(),
             "关于 豆包桌宠",
             "豆包桌宠 — 语音输入工具\n\n"
-            "🎤 按住右Shift 说话，松手输出文字\n"
+            "按住右Ctrl 说话，松手输出文字\n"
             "使用豆包免费 ASR 服务\n\n"
             "技术栈: Python + PySide6 + WebSocket",
         )

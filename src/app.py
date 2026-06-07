@@ -202,13 +202,12 @@ class DoubaoPetApp:
 
     def _on_asr_result(self, text: str) -> None:
         """收到流式识别结果（可能多次调用，每次是最新完整文本）。"""
-        print(f"[App] ASR 结果: {text!r}")
         self._last_asr_text = text
 
     def _on_asr_finish(self) -> None:
         """ASR 识别完成，注入最终文本。"""
         text = self._last_asr_text.strip()
-        print(f"[App] ASR 完成，最终文本: {text!r}")
+        print(f"[App] ASR 结果: {text!r}")
 
         if text:
             self.status.show_status("done")
