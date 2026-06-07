@@ -32,9 +32,10 @@ doubao-pet/
 │   ├── main.py                  # 入口：启动 App
 │   ├── app.py                   # QApplication + 生命周期管理
 │   ├── pet_window.py            # 桌宠窗口（透明、置顶、可拖动）
-│   ├── pet_animation.py         # 动画管理（Lottie/帧序列）
+│   ├── pet_animation.py         # 动画管理（GIF/PNG 静态图）
 │   ├── tray.py                  # 系统托盘图标与菜单
 │   ├── settings.py              # 设置管理（JSON 持久化）
+│   ├── paths.py                 # 路径常量（assets 目录等）
 │   ├── auth_webview.py          # QWebEngineView 登录 + Cookie 提取 + 后台保活
 │   ├── audio_capture.py         # 麦克风录音（PyAudio / WASAPI）
 │   ├── audio_buffer.py          # 环形缓冲区（录音数据暂存）
@@ -42,16 +43,14 @@ doubao-pet/
 │   ├── doubao_protocol.py       # ASR 参数提取 + URL 构建 + JSON 消息解析
 │   ├── webview_asr_bridge.py    # WebView JS 桥接层（主力 ASR 实现，绕过 TLS 指纹检测）
 │   ├── _qwebchannel.js          # Qt 官方 QWebChannel JS 库（注入到 WebView）
-│   ├── hotkey.py                # 全局热键监听（右Shift 长按，RegisterHotKey 方案）
-│   ├── text_output.py           # 文本注入（剪贴板/SendInput）
+│   ├── hotkey.py                # 全局热键监听（右Ctrl 长按，pynput 方案）
+│   ├── text_output.py           # 文本注入（PostMessage WM_CHAR）
 │   ├── status_indicator.py      # 状态浮窗（录音中/识别中/完成）
 │   ├── pet_menu.py              # 桌宠右键/点击菜单
 │   └── utils.py                 # 通用工具函数
 ├── assets/
-│   ├── pet_idle.json            # 桌宠待机动画（Lottie）
-│   ├── pet_listening.json       # 桌宠"聆听中"动画
-│   ├── pet_thinking.json        # 桌宠"识别中"动画
-│   ├── icon.ico                 # 应用图标
+│   ├── pet_idle.gif             # 桌宠待机动画（GIF）
+│   ├── listen.gif               # 桌宠"聆听中"动画（GIF）
 │   └── tray_icon.png            # 托盘图标
 ├── requirements.txt
 ├── PROJECT_SPEC.md              # 本文档
@@ -195,7 +194,7 @@ assets/
 - [x] 再次点击桌宠 → 菜单显示「关闭语音识别」
 - [x] 开启后桌宠外观有明显变化（绿点/高亮边框/不同动画）
 - [x] 关闭程序重新打开 → 开关状态保持（读取 settings.json）
-- [ ] 关闭状态下按右Shift 无反应（日志提示「语音未开启」）
+- [x] 关闭状态下按右Ctrl 无反应（日志提示「语音未开启」）
 
 ### 预期文件
 ```

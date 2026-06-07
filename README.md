@@ -1,6 +1,6 @@
 # 豆包桌宠 — 语音输入工具
 
-> 🎤 按住右Shift 说话，松手输出文字 — 使用豆包免费 ASR 服务。
+> 🎤 按住右Ctrl 说话，松手输出文字 — 使用豆包免费 ASR 服务。
 
 ## 功能
 
@@ -40,6 +40,7 @@ python src/main.py
 │   ├── app.py               # 应用生命周期
 │   ├── tray.py              # 系统托盘
 │   ├── settings.py          # 配置管理
+│   ├── paths.py             # 路径常量
 │   ├── pet_window.py        # 桌宠窗口 (P1)
 │   ├── pet_animation.py     # 动画管理 (P1)
 │   ├── pet_menu.py          # 右键菜单 (P2)
@@ -48,7 +49,8 @@ python src/main.py
 │   ├── audio_buffer.py      # 环形缓冲区 (P4)
 │   ├── doubao_ws.py         # WebSocket 客户端 (P5)
 │   ├── doubao_protocol.py   # 豆包协议编解码 (P5)
-│   ├── hotkey.py            # 全局热键 (P6)
+│   ├── webview_asr_bridge.py # WebView JS 桥接 ASR (P5)
+│   ├── hotkey.py            # 全局热键 右Ctrl (P6)
 │   ├── text_output.py       # 文本注入 (P7)
 │   ├── status_indicator.py  # 状态浮窗 (P8)
 │   └── utils.py             # 通用工具

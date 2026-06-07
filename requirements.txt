@@ -1,7 +1,7 @@
 PySide6>=6.6
+PySide6-WebEngine>=6.6
 pyaudio>=0.2.14
 websocket-client>=1.8
-pywebview>=5.2
 pywin32>=306
 Pillow>=10.0
 requests>=2.31

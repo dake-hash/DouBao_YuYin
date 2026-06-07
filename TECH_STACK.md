@@ -13,7 +13,7 @@
 |------|------|------|------|
 | 框架 | PySide6 | 桌面宠物窗口、系统托盘、菜单 | Qt for Python 官方绑定 |
 | 动画 | QMovie (GIF) / QLottieWidget | 桌宠待机/聆听/思考动画 | 初期用 GIF 占位，后期切 Lottie |
-| WebView | pywebview (WebView2) | 登录豆包时内嵌浏览器 | Windows 10/11 内置 Edge WebView2 Runtime |
+| WebView | PySide6.QtWebEngineWidgets.QWebEngineView | 登录豆包时内嵌浏览器 + ASR JS 桥接宿主 | Chromium 内核，TLS 指纹与真实浏览器一致，可绕过豆包 CDN/WAF 检测 |
 
 ## 音频层
 
@@ -27,8 +27,8 @@
 
 | 组件 | 选型 | 用途 | 备注 |
 |------|------|------|------|
-| WebSocket | websocket-client | 直连豆包 ASR 服务 | wss://openspeech.bytedance.com |
-| 协议 | 自研编解码 | 豆包自定义二进制协议 | 参考 doubao-murmur 实现 |
+| WebSocket | websocket-client | 直连豆包 ASR 服务（非 CDN 拦截环境备用） | wss://ws-samantha.doubao.com/samantha/audio/asr |
+| 协议 | 裸 PCM + 纯 JSON | 上行：裸 PCM Int16 LE binary frame；下行：纯 JSON 文本帧（event: result/finish），无二进制帧头，无握手消息 | 主力实现为 WebView JS 桥接，Python 直连版仅作备用 |
 | HTTP | requests | 下载资源文件等 | 轻量级 HTTP 客户端 |
 
 ## 系统交互层
