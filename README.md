@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **语音转文字**：长按右Shift 录音 → 松手自动识别 → 文本注入当前窗口
+- **语音转文字**：长按右Ctrl 录音 → 松手自动识别 → 文本注入当前窗口
 - **桌面宠物**：透明置顶的可爱桌宠，动画状态反馈
 - **系统托盘**：最小化到托盘，右键菜单操作
 - **安全无杀软风险**：使用 RegisterHotKey 系统原生 API，不注册任何键盘钩子
@@ -16,25 +16,19 @@
 
 ## 快速开始
 
-```bash
-# 1. 克隆项目
-git clone https://github.com/dake-hash/DouBao_YuYin.git
-cd DouBao_YuYin
+双击对应的启动脚本即可，脚本会自动检测并安装所需环境和依赖。
 
-# 2. 创建虚拟环境
-python -m venv venv
-venv\Scripts\activate
+| 脚本 | 适用场景 |
+|------|------|
+| `start.bat` | 电脑上没有 `requirements.txt` 中任何依赖的用户。依赖会安装到系统 Python 环境，后续其他项目若用到相同依赖可直接复用，无需重复安装。 |
+| `start_venv.bat` | 电脑上已有部分 Python 依赖的用户。依赖会安装到项目独立的虚拟环境中，完全不影响你现有的开发环境，但会额外占用约 600MB 磁盘空间。 |
 
-# 3. 安装 PyAudio（Windows 需单独处理）
-pip install pipwin
-pipwin install pyaudio
+**首次运行**会自动完成所有环境配置，需要等待几分钟。之后每次启动直接跳过安装步骤，秒级启动。
 
-# 4. 安装其余依赖
-pip install -r requirements.txt
-
-# 5. 运行
-python src/main.py
-```
+**前提条件：**
+- 需要联网（安装依赖 + 豆包 ASR 服务）
+- 需要有麦克风
+- 需要有豆包账号（[doubao.com](https://www.doubao.com) 免费注册）
 
 ## 项目结构
 
