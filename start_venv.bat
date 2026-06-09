@@ -56,13 +56,33 @@ call venv\Scripts\activate.bat
 
 echo Checking dependencies...
 
-pip install -r requirements.txt --index-url https://pypi.org/simple/
+:: Install uv if not available, then use it to install packages
+where uv >nul 2>&1
+if %errorlevel% equ 0 (
+    uv pip install -r requirements.txt
+) else (
+    echo Installing uv package manager...
+    pip install uv
+    if %errorlevel% equ 0 (
+        venv\Scripts\uv.exe pip install -r requirements.txt
+    ) else (
+        echo uv installation failed, falling back to pip...
+        pip install -r requirements.txt
+    )
+)
 if %errorlevel% neq 0 (
     echo Dependency installation failed. Check your network or run: pip install -r requirements.txt
     pause
     exit /b 1
 )
 
+:: Trim unused PySide6 files after first install (runs once, skipped on subsequent launches)
+if not exist "venv\.cleaned" (
+    echo Cleaning unused PySide6 files...
+    python cleanup_pyside6.py
+)
+
+:run
 echo Starting DouBao Desktop Pet...
 python src/main.py
 if %errorlevel% neq 0 (

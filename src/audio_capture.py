@@ -8,7 +8,10 @@ P4: 使用 PyAudio 从系统麦克风采集 PCM 16kHz 16bit 单声道音频，
 import threading
 from typing import Optional
 
-import pyaudio
+try:
+    import pyaudio
+except ImportError:
+    import pyaudiowpatch as pyaudio
 
 from audio_buffer import AudioBuffer
 
