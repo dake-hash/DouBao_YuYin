@@ -91,6 +91,15 @@ class DoubaoPetApp:
             self.settings.first_run = False
             print("[App] 首次运行，已标记 first_run = False")
 
+        # 根据上次保存的开关状态恢复锁文件
+        from pathlib import Path
+        from claude_notify.hook_manager import acquire_lock, release_lock, is_configured
+        project_root = Path(__file__).parent.parent
+        if self.settings.claude_notify_enabled and is_configured():
+            acquire_lock(project_root)
+        else:
+            release_lock(project_root)
+
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
@@ -108,6 +117,10 @@ class DoubaoPetApp:
         self.status.hide()
         if self._auth_webview is not None:
             self._auth_webview.destroy_background()
+        # 退出时释放锁，语音助手随之停止响应
+        from pathlib import Path
+        from claude_notify.hook_manager import release_lock
+        release_lock(Path(__file__).parent.parent)
         self._app.quit()
 
     # ------------------------------------------------------------------
@@ -329,14 +342,18 @@ class DoubaoPetApp:
         from claude_notify import hook_manager
         from pet_menu import ClaudeNotifyConfigDialog
 
+        project_root = Path(__file__).parent.parent
+
         if enabled and not hook_manager.is_configured():
-            project_root = Path(__file__).parent.parent
             dlg = ClaudeNotifyConfigDialog(project_root, self.pet_window)
             dlg.exec()
-            # 弹窗关闭后仍未配置则回退开关状态
             if not hook_manager.is_configured():
                 self.settings.claude_notify_enabled = False
                 return
 
         self.settings.claude_notify_enabled = enabled
+        if enabled:
+            hook_manager.acquire_lock(project_root)
+        else:
+            hook_manager.release_lock(project_root)
         print(f"[App] Claude 语音助手 → {'开启' if enabled else '关闭'}")

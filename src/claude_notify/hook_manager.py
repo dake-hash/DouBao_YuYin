@@ -1,5 +1,5 @@
 """
-hook_manager.py — 读写 ~/.claude/settings.json 的 Hook 配置
+hook_manager.py — 读写 ~/.claude/settings.json 的 Hook 配置，以及锁文件管理
 """
 
 import json
@@ -11,8 +11,26 @@ _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 
 def _notify_script_path(project_root: Path) -> str:
     script = project_root / "src" / "claude_notify" / "notify.py"
-    # 统一使用正斜杠，Windows Python 均支持
     return str(script).replace("\\", "/")
+
+
+def lock_file_path(project_root: Path) -> Path:
+    """返回锁文件路径（项目内，不在用户目录）。"""
+    return project_root / "assets" / "claude_notify" / ".lock"
+
+
+def acquire_lock(project_root: Path) -> None:
+    """桌宠启动且语音助手开启时写入锁文件。"""
+    lock_file_path(project_root).touch()
+
+
+def release_lock(project_root: Path) -> None:
+    """桌宠退出时删除锁文件。"""
+    lf = lock_file_path(project_root)
+    try:
+        lf.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def is_configured() -> bool:

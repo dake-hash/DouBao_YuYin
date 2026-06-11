@@ -20,3 +20,4 @@ build/
 # OS
 Thumbs.db
 .DS_Store
+assets/claude_notify/.lock
