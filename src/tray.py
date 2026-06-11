@@ -41,8 +41,9 @@ class TrayIcon(QSystemTrayIcon):
 
     quit_requested = Signal()
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, settings, parent=None) -> None:
         super().__init__(parent)
+        self._settings = settings
         self._setup_icon()
         self._setup_menu()
 

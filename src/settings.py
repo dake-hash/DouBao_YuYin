@@ -13,11 +13,12 @@ class Settings:
     """应用设置管理，读写 JSON 配置文件。
 
     默认配置:
-        voice_enabled: False  — 语音识别是否开启
-        hotkey: "rshift"      — 全局热键
-        first_run: True       — 是否首次运行
-        auth_token: None      — 豆包登录凭证
-        auth_expiry: None     — 凭证过期时间
+        voice_enabled: False          — 语音识别是否开启
+        hotkey: "rshift"              — 全局热键
+        first_run: True               — 是否首次运行
+        auth_token: None              — 豆包登录凭证
+        auth_expiry: None             — 凭证过期时间
+        claude_notify_enabled: False  — Claude 语音助手是否开启
     """
 
     DEFAULT_SETTINGS: dict[str, Any] = {
@@ -26,6 +27,7 @@ class Settings:
         "first_run": True,
         "auth_token": None,
         "auth_expiry": None,
+        "claude_notify_enabled": False,
     }
 
     def __init__(self, filepath: Optional[str] = None) -> None:
@@ -108,6 +110,15 @@ class Settings:
     @auth_expiry.setter
     def auth_expiry(self, value: Optional[str]) -> None:
         self._data["auth_expiry"] = value
+        self.save()
+
+    @property
+    def claude_notify_enabled(self) -> bool:
+        return self._data["claude_notify_enabled"]
+
+    @claude_notify_enabled.setter
+    def claude_notify_enabled(self, value: bool) -> None:
+        self._data["claude_notify_enabled"] = value
         self.save()
 
     # ------------------------------------------------------------------

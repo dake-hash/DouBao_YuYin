@@ -40,6 +40,7 @@ class PetWindow(QWidget):
     voice_toggled = Signal(bool)
     login_completed = Signal()
     login_requested = Signal()  # P8 fix: 上移到 app 层处理，避免 profile 冲突
+    claude_notify_toggled = Signal(bool)
 
     def __init__(self, settings=None, size: int = 200) -> None:
         super().__init__()
@@ -168,6 +169,7 @@ class PetWindow(QWidget):
         menu = PetMenu(self, self._settings)
         menu.voice_toggled.connect(self._on_voice_toggled)
         menu.login_requested.connect(self._on_login_requested)
+        menu.claude_notify_toggled.connect(self.claude_notify_toggled.emit)
         menu.quit_requested.connect(QApplication.instance().quit)
 
         # 菜单弹在桌宠右下角，紧贴不覆盖

@@ -44,10 +44,11 @@ class DoubaoPetApp:
         self.pet_window.voice_toggled.connect(self._on_voice_toggled)
         self.pet_window.login_completed.connect(self._on_login_completed)
         self.pet_window.login_requested.connect(self._on_login_requested)
+        self.pet_window.claude_notify_toggled.connect(self._on_claude_notify_toggled)
         self.pet_window.show()
 
         # ── 系统托盘 ────────────────────────────────────────────
-        self.tray = TrayIcon()
+        self.tray = TrayIcon(self.settings)
         self._update_tray_tooltip(self.settings.voice_enabled)
         self.tray.quit_requested.connect(self.quit)
         self.tray.show()
@@ -317,3 +318,25 @@ class DoubaoPetApp:
             self.settings.auth_token = None
             self.settings.auth_expiry = None
             self.tray.show_message("豆包桌宠", "登录已过期，请重新登录豆包")
+
+    # ------------------------------------------------------------------
+    # Claude 语音助手
+    # ------------------------------------------------------------------
+
+    def _on_claude_notify_toggled(self, enabled: bool) -> None:
+        """处理 Claude 语音助手开关切换。"""
+        from pathlib import Path
+        from claude_notify import hook_manager
+        from pet_menu import ClaudeNotifyConfigDialog
+
+        if enabled and not hook_manager.is_configured():
+            project_root = Path(__file__).parent.parent
+            dlg = ClaudeNotifyConfigDialog(project_root, self.pet_window)
+            dlg.exec()
+            # 弹窗关闭后仍未配置则回退开关状态
+            if not hook_manager.is_configured():
+                self.settings.claude_notify_enabled = False
+                return
+
+        self.settings.claude_notify_enabled = enabled
+        print(f"[App] Claude 语音助手 → {'开启' if enabled else '关闭'}")
